@@ -26,11 +26,13 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	getCORS := CORS(deps.AllowedOrigin, "GET, OPTIONS")
 	uploadCORS := CORS(deps.AllowedOrigin, "POST, OPTIONS")
 	fileCORS := CORS(deps.AllowedOrigin, "GET, DELETE, OPTIONS")
+	metricsCORS := CORS(deps.AllowedOrigin, "GET, OPTIONS")
 	noop := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 
 	router.With(getCORS).Get("/healthz", handleHealthCheck)
 	router.Options("/healthz", getCORS(noop).ServeHTTP)
-	router.Handle("/metrics", promhttp.Handler())
+	router.With(metricsCORS).Handle("/metrics", promhttp.Handler())
+	router.Options("/metrics", metricsCORS(noop).ServeHTTP)
 
 	router.Route("/api/v1", func(apiRouter chi.Router) {
 		apiRouter.With(uploadCORS).Post("/upload", deps.UploadHandler.ServeHTTP)
@@ -49,3 +51,4 @@ func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
+
