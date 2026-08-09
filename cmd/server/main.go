@@ -90,10 +90,18 @@ func main() {
 	fileService := file.NewService(repository, objectStorage, cachePurger, cfg.CloudflareCacheEnabled, log)
 	fileHandler := file.NewHandler(fileService)
 
+	configHandler := upload.NewConfigHandler(
+		cfg.ServerMaxUploadMB,
+		cfg.AllowedMimeTypes,
+		cfg.BlockedExtensions,
+		cfg.FileTTLHours,
+	)
+
 	router := httpserver.NewRouter(httpserver.RouterDependencies{
 		Logger:        log,
 		UploadHandler: uploadHandler,
 		FileHandler:   fileHandler,
+		ConfigHandler: configHandler,
 		AllowedOrigin: cfg.AllowedOrigin,
 	})
 

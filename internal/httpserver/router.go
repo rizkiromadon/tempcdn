@@ -14,6 +14,7 @@ type RouterDependencies struct {
 	Logger        *slog.Logger
 	UploadHandler *upload.Handler
 	FileHandler   *file.Handler
+	ConfigHandler *upload.ConfigHandler
 	AllowedOrigin string
 }
 
@@ -41,6 +42,9 @@ func NewRouter(deps RouterDependencies) http.Handler {
 		apiRouter.With(fileCORS).Get("/files/{id}", deps.FileHandler.GetInfo)
 		apiRouter.With(fileCORS).Delete("/files/{id}", deps.FileHandler.Delete)
 		apiRouter.Options("/files/{id}", fileCORS(noop).ServeHTTP)
+
+		apiRouter.With(getCORS).Get("/config", deps.ConfigHandler.ServeHTTP)
+		apiRouter.Options("/config", getCORS(noop).ServeHTTP)
 	})
 
 	return router
