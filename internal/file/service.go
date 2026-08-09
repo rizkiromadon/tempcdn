@@ -3,8 +3,10 @@ package file
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
+	"github.com/tempcdn/tempcdn/internal/cloudflare"
 	"github.com/tempcdn/tempcdn/internal/metadata"
 	"github.com/tempcdn/tempcdn/internal/storage"
 )
@@ -15,12 +17,18 @@ var ErrAlreadyExpired = errors.New("file has already expired")
 type Service struct {
 	repository    metadata.Repository
 	objectStorage storage.ObjectStorage
+	cachePurger   cloudflare.Purger
+	cachePurgeOn  bool
+	logger        *slog.Logger
 }
 
-func NewService(repository metadata.Repository, objectStorage storage.ObjectStorage) *Service {
+func NewService(repository metadata.Repository, objectStorage storage.ObjectStorage, cachePurger cloudflare.Purger, cachePurgeOn bool, logger *slog.Logger) *Service {
 	return &Service{
 		repository:    repository,
 		objectStorage: objectStorage,
+		cachePurger:   cachePurger,
+		cachePurgeOn:  cachePurgeOn,
+		logger:        logger,
 	}
 }
 
@@ -62,5 +70,12 @@ func (s *Service) DeleteBeforeTTL(ctx context.Context, id string) error {
 	if err := s.repository.DeleteByID(ctx, id); err != nil && !errors.Is(err, metadata.ErrFileNotFound) {
 		return err
 	}
+
+	if s.cachePurgeOn && s.cachePurger != nil && record.CDNURL != "" {
+		if err := s.cachePurger.PurgeURLs(ctx, []string{record.CDNURL}); err != nil && s.logger != nil {
+			s.logger.Error("cloudflare_cache_purge_failed", "id", id, "url", record.CDNURL, "error", err)
+		}
+	}
+
 	return nil
 }

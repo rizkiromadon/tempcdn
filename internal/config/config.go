@@ -29,6 +29,10 @@ type Config struct {
 
 	AllowedMimeTypes  []string
 	BlockedExtensions []string
+
+	CloudflareCacheEnabled bool
+	CloudflareZoneID       string
+	CloudflareAPIToken     string
 }
 
 func Load() (*Config, error) {
@@ -43,7 +47,16 @@ func Load() (*Config, error) {
 		R2PublicBaseURL:   os.Getenv("R2_PUBLIC_BASE_URL"),
 		IPHashSalt:        getEnvOrDefault("IP_HASH_SALT", "insecure-default-salt"),
 		AllowedOrigin:     os.Getenv("ALLOWED_ORIGIN"),
+
+		CloudflareZoneID:   os.Getenv("CLOUDFLARE_ZONE_ID"),
+		CloudflareAPIToken: os.Getenv("CLOUDFLARE_API_TOKEN"),
 	}
+
+	cloudflareEnabled, err := parseBoolOrDefault("CLOUDFLARE_CACHE_ENABLED", false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.CloudflareCacheEnabled = cloudflareEnabled
 
 	maxUploadMB, err := parseIntOrDefault("SERVER_MAX_UPLOAD_MB", 100)
 	if err != nil {
@@ -89,6 +102,14 @@ func (c *Config) validate() error {
 	if c.AllowedOrigin == "" {
 		return fmt.Errorf("ALLOWED_ORIGIN must be set")
 	}
+	if c.CloudflareCacheEnabled {
+		if c.CloudflareZoneID == "" {
+			return fmt.Errorf("CLOUDFLARE_ZONE_ID must be set when CLOUDFLARE_CACHE_ENABLED is true")
+		}
+		if c.CloudflareAPIToken == "" {
+			return fmt.Errorf("CLOUDFLARE_API_TOKEN must be set when CLOUDFLARE_CACHE_ENABLED is true")
+		}
+	}
 	return nil
 }
 
@@ -108,6 +129,18 @@ func parseIntOrDefault(key string, fallback int) (int, error) {
 	parsed, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("invalid integer value for %s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func parseBoolOrDefault(key string, fallback bool) (bool, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("invalid boolean value for %s: %w", key, err)
 	}
 	return parsed, nil
 }

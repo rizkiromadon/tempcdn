@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tempcdn/tempcdn/internal/cloudflare"
 	"github.com/tempcdn/tempcdn/internal/config"
 	"github.com/tempcdn/tempcdn/internal/file"
 	"github.com/tempcdn/tempcdn/internal/httpserver"
@@ -81,7 +82,12 @@ func main() {
 		metrics.UploadErrorsTotal,
 	)
 
-	fileService := file.NewService(repository, objectStorage)
+	var cachePurger cloudflare.Purger
+	if cfg.CloudflareCacheEnabled {
+		cachePurger = cloudflare.NewClient(cfg.CloudflareZoneID, cfg.CloudflareAPIToken)
+	}
+
+	fileService := file.NewService(repository, objectStorage, cachePurger, cfg.CloudflareCacheEnabled, log)
 	fileHandler := file.NewHandler(fileService)
 
 	router := httpserver.NewRouter(httpserver.RouterDependencies{
