@@ -25,6 +25,8 @@ type Config struct {
 
 	IPHashSalt string
 
+	AllowedOrigin string
+
 	AllowedMimeTypes  []string
 	BlockedExtensions []string
 }
@@ -40,6 +42,7 @@ func Load() (*Config, error) {
 		R2Endpoint:        os.Getenv("R2_ENDPOINT"),
 		R2PublicBaseURL:   os.Getenv("R2_PUBLIC_BASE_URL"),
 		IPHashSalt:        getEnvOrDefault("IP_HASH_SALT", "insecure-default-salt"),
+		AllowedOrigin:     os.Getenv("ALLOWED_ORIGIN"),
 	}
 
 	maxUploadMB, err := parseIntOrDefault("SERVER_MAX_UPLOAD_MB", 100)
@@ -82,6 +85,9 @@ func (c *Config) validate() error {
 	}
 	if c.R2BucketName == "" {
 		return fmt.Errorf("R2_BUCKET_NAME must be set")
+	}
+	if c.AllowedOrigin == "" {
+		return fmt.Errorf("ALLOWED_ORIGIN must be set")
 	}
 	return nil
 }

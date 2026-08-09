@@ -14,6 +14,7 @@ type RouterDependencies struct {
 	Logger        *slog.Logger
 	UploadHandler *upload.Handler
 	FileHandler   *file.Handler
+	AllowedOrigin string
 }
 
 func NewRouter(deps RouterDependencies) http.Handler {
@@ -22,14 +23,22 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	router.Use(Recovery(deps.Logger))
 	router.Use(RequestLogging(deps.Logger))
 
-	router.Get("/healthz", handleHealthCheck)
+	getCORS := CORS(deps.AllowedOrigin, "GET, OPTIONS")
+	uploadCORS := CORS(deps.AllowedOrigin, "POST, OPTIONS")
+	fileCORS := CORS(deps.AllowedOrigin, "GET, DELETE, OPTIONS")
+	noop := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+
+	router.With(getCORS).Get("/healthz", handleHealthCheck)
+	router.Options("/healthz", getCORS(noop).ServeHTTP)
 	router.Handle("/metrics", promhttp.Handler())
 
 	router.Route("/api/v1", func(apiRouter chi.Router) {
-		apiRouter.With(StrictCORS("")).Post("/upload", deps.UploadHandler.ServeHTTP)
+		apiRouter.With(uploadCORS).Post("/upload", deps.UploadHandler.ServeHTTP)
+		apiRouter.Options("/upload", uploadCORS(noop).ServeHTTP)
 
-		apiRouter.With(PermissiveCORS).Get("/files/{id}", deps.FileHandler.GetInfo)
-		apiRouter.With(StrictCORS("")).Delete("/files/{id}", deps.FileHandler.Delete)
+		apiRouter.With(fileCORS).Get("/files/{id}", deps.FileHandler.GetInfo)
+		apiRouter.With(fileCORS).Delete("/files/{id}", deps.FileHandler.Delete)
+		apiRouter.Options("/files/{id}", fileCORS(noop).ServeHTTP)
 	})
 
 	return router

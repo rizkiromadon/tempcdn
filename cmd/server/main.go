@@ -88,6 +88,7 @@ func main() {
 		Logger:        log,
 		UploadHandler: uploadHandler,
 		FileHandler:   fileHandler,
+		AllowedOrigin: cfg.AllowedOrigin,
 	})
 
 	server := &http.Server{
