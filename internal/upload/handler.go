@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -23,9 +24,10 @@ type Handler struct {
 	uploadsTotal       prometheus.Counter
 	uploadBytesTotal   prometheus.Counter
 	uploadErrorsTotal  prometheus.Counter
+	logger             *slog.Logger
 }
 
-func NewHandler(service *Service, concurrencyLimiter *ratelimit.ConcurrencyLimiter, maxUploadSizeBytes int64, ipHashSalt string, uploadsTotal prometheus.Counter, uploadBytesTotal prometheus.Counter, uploadErrorsTotal prometheus.Counter) *Handler {
+func NewHandler(service *Service, concurrencyLimiter *ratelimit.ConcurrencyLimiter, maxUploadSizeBytes int64, ipHashSalt string, uploadsTotal prometheus.Counter, uploadBytesTotal prometheus.Counter, uploadErrorsTotal prometheus.Counter, logger *slog.Logger) *Handler {
 	return &Handler{
 		service:            service,
 		concurrencyLimiter: concurrencyLimiter,
@@ -34,6 +36,7 @@ func NewHandler(service *Service, concurrencyLimiter *ratelimit.ConcurrencyLimit
 		uploadsTotal:       uploadsTotal,
 		uploadBytesTotal:   uploadBytesTotal,
 		uploadErrorsTotal:  uploadErrorsTotal,
+		logger:             logger,
 	}
 }
 
@@ -48,6 +51,10 @@ type uploadResponseBody struct {
 	CreatedAt      string `json:"created_at"`
 	ExpiresAt      string `json:"expires_at"`
 	Duplicate      bool   `json:"duplicate"`
+	// DeleteToken authorizes DELETE /api/v1/files/{id}. It is shown only
+	// once, in this response, and is empty for duplicate uploads (the
+	// original uploader already holds the real one).
+	DeleteToken string `json:"delete_token,omitempty"`
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +89,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.uploadErrorsTotal.Inc()
-		writeUploadError(w, err)
+		writeUploadError(h.logger, w, err)
 		return
 	}
 
@@ -92,16 +99,40 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, toUploadResponseBody(result))
 }
 
-func writeUploadError(w http.ResponseWriter, err error) {
+func writeUploadError(logger *slog.Logger, w http.ResponseWriter, err error) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		response.Error(w, http.StatusGatewayTimeout, "upload timed out")
 		return
 	}
+
+	// metadata.ErrFileNotFound is the *expected*, non-error outcome of the
+	// dedup lookup inside Service.Upload (it means "not a duplicate,
+	// proceed") and is handled internally there - it is never itself
+	// returned as Upload's error. This check is defensive only, guarding
+	// against a future refactor accidentally letting it leak through; if it
+	// ever fires, that's a bug worth knowing about, so it's logged as one.
 	if errors.Is(err, metadata.ErrFileNotFound) {
+		if logger != nil {
+			logger.Error("unexpected_err_file_not_found_in_upload_path", "error", err)
+		}
 		response.Error(w, http.StatusInternalServerError, "internal error processing upload")
 		return
 	}
-	response.Error(w, http.StatusBadRequest, err.Error())
+
+	var validationErr *ValidationError
+	if errors.As(err, &validationErr) {
+		response.Error(w, http.StatusBadRequest, validationErr.Error())
+		return
+	}
+
+	// Anything else (temp file creation, storage puts, DB writes, the
+	// spooled-vs-declared size mismatch) is an internal/infra failure, not
+	// the client's fault - don't leak raw Go error text (temp paths, driver
+	// messages) and don't mislabel it as a 400.
+	if logger != nil {
+		logger.Error("upload_failed", "error", err)
+	}
+	response.Error(w, http.StatusInternalServerError, "failed to process upload")
 }
 
 func toUploadResponseBody(result *Result) uploadResponseBody {
@@ -117,6 +148,7 @@ func toUploadResponseBody(result *Result) uploadResponseBody {
 		CreatedAt:      record.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		ExpiresAt:      record.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
 		Duplicate:      result.Duplicate,
+		DeleteToken:    result.DeleteToken,
 	}
 }
 

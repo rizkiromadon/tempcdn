@@ -22,6 +22,28 @@ func newTestRepository(t *testing.T) *SQLiteRepository {
 	return repo
 }
 
+// TestMigrateIsIdempotent guards against a real regression: Migrate() has no
+// applied-migrations tracking table and simply re-executes every file in
+// migrations/ on every process startup (see repository.go), so every
+// individual migration statement must itself be safe to run more than once
+// (CREATE TABLE/INDEX IF NOT EXISTS, ALTER TABLE ADD COLUMN IF NOT EXISTS,
+// etc). A restart of the server is exactly the scenario that would hit this.
+func TestMigrateIsIdempotent(t *testing.T) {
+	repo, err := NewSQLiteRepository("file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("failed to create repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	if err := repo.Migrate(ctx); err != nil {
+		t.Fatalf("first migrate failed: %v", err)
+	}
+	if err := repo.Migrate(ctx); err != nil {
+		t.Fatalf("second migrate (simulating a server restart) failed: %v", err)
+	}
+}
+
 func sampleRecord(id string, checksum string, createdAt time.Time, ttl time.Duration) *FileRecord {
 	return &FileRecord{
 		ID:             id,
@@ -128,5 +150,60 @@ func TestDeleteByIDNotFound(t *testing.T) {
 	err := repo.DeleteByID(ctx, "never-existed")
 	if !errors.Is(err, ErrFileNotFound) {
 		t.Fatalf("expected ErrFileNotFound, got %v", err)
+	}
+}
+
+func TestFindExpiredReturnsOnlyExpiredRecordsOldestFirst(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	active := sampleRecord("id-active", "checksum-active", now, 24*time.Hour)
+	if err := repo.Insert(ctx, active); err != nil {
+		t.Fatalf("insert active record failed: %v", err)
+	}
+
+	expiredOlder := sampleRecord("id-expired-older", "checksum-expired-older", now.Add(-48*time.Hour), 1*time.Hour)
+	if err := repo.Insert(ctx, expiredOlder); err != nil {
+		t.Fatalf("insert older expired record failed: %v", err)
+	}
+
+	expiredNewer := sampleRecord("id-expired-newer", "checksum-expired-newer", now.Add(-2*time.Hour), 1*time.Hour)
+	if err := repo.Insert(ctx, expiredNewer); err != nil {
+		t.Fatalf("insert newer expired record failed: %v", err)
+	}
+
+	found, err := repo.FindExpired(ctx, now, 10)
+	if err != nil {
+		t.Fatalf("find expired failed: %v", err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("expected 2 expired records, got %d", len(found))
+	}
+	if found[0].ID != "id-expired-older" || found[1].ID != "id-expired-newer" {
+		t.Errorf("expected oldest-expiry-first ordering, got %s then %s", found[0].ID, found[1].ID)
+	}
+}
+
+func TestFindExpiredRespectsLimit(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	past := now.Add(-48 * time.Hour)
+
+	for i := 0; i < 5; i++ {
+		id := "id-expired-" + string(rune('a'+i))
+		record := sampleRecord(id, "checksum-"+id, past, 1*time.Hour)
+		if err := repo.Insert(ctx, record); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	found, err := repo.FindExpired(ctx, now, 3)
+	if err != nil {
+		t.Fatalf("find expired failed: %v", err)
+	}
+	if len(found) != 3 {
+		t.Errorf("expected limit of 3 records, got %d", len(found))
 	}
 }

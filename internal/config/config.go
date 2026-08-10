@@ -7,6 +7,12 @@ import (
 	"strings"
 )
 
+// insecureDefaultIPHashSalt is used only when IP_HASH_SALT is unset. It is
+// intentionally recognizable so validate() can detect and warn/fail when an
+// operator forgot to set a real secret, since a known salt makes hashed IPs
+// trivially reversible via a rainbow table of common IPs.
+const insecureDefaultIPHashSalt = "insecure-default-salt"
+
 type Config struct {
 	ServerPort        string
 	ServerMaxUploadMB int64
@@ -18,14 +24,17 @@ type Config struct {
 	R2Endpoint        string
 	R2PublicBaseURL   string
 
-	DatabaseDSN  string
-	FileTTLHours int
+	DatabaseDSN           string
+	FileTTLHours          int
+	FileSweepIntervalMins int
 
 	RateLimitMaxConcurrentUploads int
 
 	IPHashSalt string
 
 	AllowedOrigin string
+
+	MetricsToken string
 
 	AllowedMimeTypes  []string
 	BlockedExtensions []string
@@ -38,15 +47,16 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		ServerPort:        getEnvOrDefault("SERVER_PORT", "8080"),
-		DatabaseDSN:       getEnvOrDefault("DATABASE_DSN", "file:tempcdn.db?cache=shared&_fk=1"),
+		DatabaseDSN:       getEnvOrDefault("DATABASE_DSN", "file:tempcdn.db?cache=shared&_fk=1&_journal_mode=WAL&_busy_timeout=5000"),
 		R2AccountID:       os.Getenv("R2_ACCOUNT_ID"),
 		R2AccessKeyID:     os.Getenv("R2_ACCESS_KEY_ID"),
 		R2SecretAccessKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
 		R2BucketName:      getEnvOrDefault("R2_BUCKET_NAME", "tempcdn-files"),
 		R2Endpoint:        os.Getenv("R2_ENDPOINT"),
 		R2PublicBaseURL:   os.Getenv("R2_PUBLIC_BASE_URL"),
-		IPHashSalt:        getEnvOrDefault("IP_HASH_SALT", "insecure-default-salt"),
+		IPHashSalt:        getEnvOrDefault("IP_HASH_SALT", insecureDefaultIPHashSalt),
 		AllowedOrigin:     os.Getenv("ALLOWED_ORIGIN"),
+		MetricsToken:      os.Getenv("METRICS_TOKEN"),
 
 		CloudflareZoneID:   os.Getenv("CLOUDFLARE_ZONE_ID"),
 		CloudflareAPIToken: os.Getenv("CLOUDFLARE_API_TOKEN"),
@@ -70,9 +80,30 @@ func Load() (*Config, error) {
 	}
 	cfg.FileTTLHours = ttlHours
 
-	maxConcurrent, err := parseIntOrDefault("RATE_LIMIT_MAX_CONCURRENT_UPLOADS", 50)
+	sweepIntervalMins, err := parseIntOrDefault("FILE_SWEEP_INTERVAL_MINUTES", 5)
 	if err != nil {
 		return nil, err
+	}
+	cfg.FileSweepIntervalMins = sweepIntervalMins
+
+	// SERVER_MAX_CONCURRENT_UPLOADS is the current name for this setting: it's
+	// a global, process-wide concurrency cap, not a per-client rate limit, so
+	// it intentionally doesn't live in the RATE_LIMIT_* namespace (see L5 in
+	// the code review - that naming invited confusion with per-IP limiting,
+	// which this application does not implement). The old
+	// RATE_LIMIT_MAX_CONCURRENT_UPLOADS name is still honored for one
+	// deprecation cycle so existing deployments don't silently fall back to
+	// the default.
+	maxConcurrent, err := parseIntOrDefault("SERVER_MAX_CONCURRENT_UPLOADS", -1)
+	if err != nil {
+		return nil, err
+	}
+	if maxConcurrent == -1 {
+		legacyMaxConcurrent, err := parseIntOrDefault("RATE_LIMIT_MAX_CONCURRENT_UPLOADS", 50)
+		if err != nil {
+			return nil, err
+		}
+		maxConcurrent = legacyMaxConcurrent
 	}
 	cfg.RateLimitMaxConcurrentUploads = maxConcurrent
 
@@ -101,6 +132,15 @@ func (c *Config) validate() error {
 	}
 	if c.AllowedOrigin == "" {
 		return fmt.Errorf("ALLOWED_ORIGIN must be set")
+	}
+	if c.IPHashSalt == insecureDefaultIPHashSalt || c.IPHashSalt == "" {
+		allowInsecure, err := parseBoolOrDefault("ALLOW_INSECURE_IP_HASH_SALT", false)
+		if err != nil {
+			return err
+		}
+		if !allowInsecure {
+			return fmt.Errorf("IP_HASH_SALT must be set to a random secret (refusing to start with the well-known default; set ALLOW_INSECURE_IP_HASH_SALT=true to override for local development only)")
+		}
 	}
 	if c.CloudflareCacheEnabled {
 		if c.CloudflareZoneID == "" {

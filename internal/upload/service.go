@@ -35,6 +35,11 @@ type Input struct {
 type Result struct {
 	Record    *metadata.FileRecord
 	Duplicate bool
+	// DeleteToken is the plaintext delete-authorization token. It is only
+	// ever populated for a fresh (non-duplicate) upload, since only the
+	// original uploader who received it at upload time should be able to
+	// delete the file - a later "duplicate" uploader does not get it.
+	DeleteToken string
 }
 
 func NewService(repository metadata.Repository, objectStorage storage.ObjectStorage, validator *Validator, fileTTL time.Duration, publicBaseURL string) *Service {
@@ -79,8 +84,17 @@ func (s *Service) Upload(ctx context.Context, input Input) (*Result, error) {
 		_ = os.Remove(spooledFile.Name())
 	}()
 
-	if _, err := io.Copy(spooledFile, checksumReader); err != nil {
+	writtenBytes, err := io.Copy(spooledFile, checksumReader)
+	if err != nil {
 		return nil, fmt.Errorf("spool file content while hashing: %w", err)
+	}
+	// input.SizeBytes came from the multipart header, set before this
+	// content was actually read; writtenBytes is what was verified to
+	// reach disk (and subsequently R2). Treat writtenBytes as the source
+	// of truth and fail loudly on divergence rather than silently
+	// persisting a size that was never confirmed.
+	if writtenBytes != input.SizeBytes {
+		return nil, fmt.Errorf("upload size mismatch: multipart header reported %d bytes but %d bytes were actually read", input.SizeBytes, writtenBytes)
 	}
 	checksum := checksumReader.SumHex()
 
@@ -101,11 +115,16 @@ func (s *Service) Upload(ctx context.Context, input Input) (*Result, error) {
 	fileID := idgen.NewFileID()
 	objectKey := buildObjectKey(now, fileID, input.OriginalName)
 
+	deleteToken, err := idgen.NewDeleteToken()
+	if err != nil {
+		return nil, fmt.Errorf("generate delete token: %w", err)
+	}
+
 	putErr := s.objectStorage.PutObject(ctx, storage.PutObjectInput{
 		Key:         objectKey,
 		Body:        spooledFile,
 		ContentType: detectedContentType,
-		SizeBytes:   input.SizeBytes,
+		SizeBytes:   writtenBytes,
 	})
 	if putErr != nil {
 		return nil, fmt.Errorf("upload object to storage: %w", putErr)
@@ -113,16 +132,17 @@ func (s *Service) Upload(ctx context.Context, input Input) (*Result, error) {
 
 	expiresAt := now.Add(s.fileTTL)
 	record := &metadata.FileRecord{
-		ID:             fileID,
-		OriginalName:   input.OriginalName,
-		ContentType:    detectedContentType,
-		SizeBytes:      input.SizeBytes,
-		ChecksumSHA256: checksum,
-		ObjectKey:      objectKey,
-		CDNURL:         s.publicBaseURL + "/" + objectKey,
-		UploaderIPHash: input.UploaderIPHash,
-		CreatedAt:      now,
-		ExpiresAt:      expiresAt,
+		ID:              fileID,
+		OriginalName:    input.OriginalName,
+		ContentType:     detectedContentType,
+		SizeBytes:       writtenBytes,
+		ChecksumSHA256:  checksum,
+		ObjectKey:       objectKey,
+		CDNURL:          s.publicBaseURL + "/" + objectKey,
+		UploaderIPHash:  input.UploaderIPHash,
+		DeleteTokenHash: idgen.HashDeleteToken(deleteToken),
+		CreatedAt:       now,
+		ExpiresAt:       expiresAt,
 	}
 
 	if err := s.repository.Insert(ctx, record); err != nil {
@@ -130,7 +150,7 @@ func (s *Service) Upload(ctx context.Context, input Input) (*Result, error) {
 		return nil, fmt.Errorf("persist file metadata: %w", err)
 	}
 
-	return &Result{Record: record, Duplicate: false}, nil
+	return &Result{Record: record, Duplicate: false, DeleteToken: deleteToken}, nil
 }
 
 func buildObjectKey(now time.Time, fileID string, originalName string) string {

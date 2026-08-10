@@ -65,6 +65,19 @@ func (m *mockRepository) FindByID(ctx context.Context, id string) (*metadata.Fil
 	return nil, metadata.ErrFileNotFound
 }
 
+func (m *mockRepository) FindExpired(ctx context.Context, before time.Time, limit int) ([]*metadata.FileRecord, error) {
+	var expired []*metadata.FileRecord
+	for _, record := range m.recordsByChecksum {
+		if !record.ExpiresAt.After(before) {
+			expired = append(expired, record)
+		}
+		if len(expired) >= limit {
+			break
+		}
+	}
+	return expired, nil
+}
+
 func (m *mockRepository) DeleteByID(ctx context.Context, id string) error {
 	return nil
 }

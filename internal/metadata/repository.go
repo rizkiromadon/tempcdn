@@ -22,6 +22,10 @@ type Repository interface {
 	FindActiveByChecksum(ctx context.Context, checksum string, now time.Time) (*FileRecord, error)
 	FindByID(ctx context.Context, id string) (*FileRecord, error)
 	DeleteByID(ctx context.Context, id string) error
+	// FindExpired returns up to limit records whose expires_at is at or
+	// before "before", for the background expiry sweep. Ordered oldest
+	// expiry first so the most overdue records are cleaned up first.
+	FindExpired(ctx context.Context, before time.Time, limit int) ([]*FileRecord, error)
 	Close() error
 }
 
@@ -62,8 +66,8 @@ func (r *SQLiteRepository) Insert(ctx context.Context, record *FileRecord) error
 	query := `
 		INSERT INTO files (
 			id, original_name, content_type, size_bytes, checksum_sha256,
-			object_key, cdn_url, uploader_ip_hash, created_at, expires_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			object_key, cdn_url, uploader_ip_hash, delete_token_hash, created_at, expires_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err := r.db.ExecContext(ctx, query,
 		record.ID,
@@ -74,6 +78,7 @@ func (r *SQLiteRepository) Insert(ctx context.Context, record *FileRecord) error
 		record.ObjectKey,
 		record.CDNURL,
 		record.UploaderIPHash,
+		record.DeleteTokenHash,
 		record.CreatedAt,
 		record.ExpiresAt,
 	)
@@ -86,7 +91,7 @@ func (r *SQLiteRepository) Insert(ctx context.Context, record *FileRecord) error
 func (r *SQLiteRepository) FindActiveByChecksum(ctx context.Context, checksum string, now time.Time) (*FileRecord, error) {
 	query := `
 		SELECT id, original_name, content_type, size_bytes, checksum_sha256,
-		       object_key, cdn_url, uploader_ip_hash, created_at, expires_at
+		       object_key, cdn_url, uploader_ip_hash, delete_token_hash, created_at, expires_at
 		FROM files
 		WHERE checksum_sha256 = ? AND expires_at > ?
 		ORDER BY created_at DESC
@@ -99,12 +104,41 @@ func (r *SQLiteRepository) FindActiveByChecksum(ctx context.Context, checksum st
 func (r *SQLiteRepository) FindByID(ctx context.Context, id string) (*FileRecord, error) {
 	query := `
 		SELECT id, original_name, content_type, size_bytes, checksum_sha256,
-		       object_key, cdn_url, uploader_ip_hash, created_at, expires_at
+		       object_key, cdn_url, uploader_ip_hash, delete_token_hash, created_at, expires_at
 		FROM files
 		WHERE id = ?
 	`
 	row := r.db.QueryRowContext(ctx, query, id)
 	return scanFileRecord(row)
+}
+
+func (r *SQLiteRepository) FindExpired(ctx context.Context, before time.Time, limit int) ([]*FileRecord, error) {
+	query := `
+		SELECT id, original_name, content_type, size_bytes, checksum_sha256,
+		       object_key, cdn_url, uploader_ip_hash, delete_token_hash, created_at, expires_at
+		FROM files
+		WHERE expires_at <= ?
+		ORDER BY expires_at ASC
+		LIMIT ?
+	`
+	rows, err := r.db.QueryContext(ctx, query, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query expired file records: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*FileRecord
+	for rows.Next() {
+		record, err := scanFileRecordRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate expired file records: %w", err)
+	}
+	return records, nil
 }
 
 func (r *SQLiteRepository) DeleteByID(ctx context.Context, id string) error {
@@ -126,9 +160,25 @@ func (r *SQLiteRepository) Close() error {
 	return r.db.Close()
 }
 
+// rowScanner is satisfied by both *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...interface{}) error
+}
+
 func scanFileRecord(row *sql.Row) (*FileRecord, error) {
+	record, err := scanFileRecordRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrFileNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan file record: %w", err)
+	}
+	return record, nil
+}
+
+func scanFileRecordRow(scanner rowScanner) (*FileRecord, error) {
 	var record FileRecord
-	err := row.Scan(
+	err := scanner.Scan(
 		&record.ID,
 		&record.OriginalName,
 		&record.ContentType,
@@ -137,14 +187,20 @@ func scanFileRecord(row *sql.Row) (*FileRecord, error) {
 		&record.ObjectKey,
 		&record.CDNURL,
 		&record.UploaderIPHash,
+		&record.DeleteTokenHash,
 		&record.CreatedAt,
 		&record.ExpiresAt,
 	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrFileNotFound
-	}
 	if err != nil {
-		return nil, fmt.Errorf("scan file record: %w", err)
+		return nil, err
 	}
 	return &record, nil
+}
+
+func scanFileRecordRows(rows *sql.Rows) (*FileRecord, error) {
+	record, err := scanFileRecordRow(rows)
+	if err != nil {
+		return nil, fmt.Errorf("scan file record row: %w", err)
+	}
+	return record, nil
 }

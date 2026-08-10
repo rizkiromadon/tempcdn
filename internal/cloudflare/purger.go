@@ -73,9 +73,18 @@ func (c *Client) PurgeURLs(ctx context.Context, urls []string) error {
 		return fmt.Errorf("read purge response: %w", err)
 	}
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		const maxBodyPreview = 500
+		preview := body
+		if len(preview) > maxBodyPreview {
+			preview = preview[:maxBodyPreview]
+		}
+		return fmt.Errorf("cloudflare purge failed with HTTP status %d: %s", resp.StatusCode, preview)
+	}
+
 	var parsed purgeResponseBody
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return fmt.Errorf("decode purge response: %w", err)
+		return fmt.Errorf("decode purge response (HTTP %d): %w", resp.StatusCode, err)
 	}
 
 	if !parsed.Success {

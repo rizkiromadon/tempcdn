@@ -16,6 +16,7 @@ import (
 	"github.com/tempcdn/tempcdn/internal/metadata"
 	"github.com/tempcdn/tempcdn/internal/ratelimit"
 	"github.com/tempcdn/tempcdn/internal/storage"
+	"github.com/tempcdn/tempcdn/internal/sweeper"
 	"github.com/tempcdn/tempcdn/internal/upload"
 )
 
@@ -28,7 +29,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	// rootCtx is cancelled on shutdown signal so the background sweeper
+	// stops cleanly alongside the HTTP server.
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	defer cancelRoot()
 
 	repository, err := metadata.NewSQLiteRepository(cfg.DatabaseDSN)
 	if err != nil {
@@ -37,12 +41,12 @@ func main() {
 	}
 	defer repository.Close()
 
-	if err := repository.Migrate(ctx); err != nil {
+	if err := repository.Migrate(rootCtx); err != nil {
 		log.Error("failed to run metadata migrations", "error", err)
 		os.Exit(1)
 	}
 
-	objectStorage, err := storage.NewR2Client(ctx, storage.R2ClientConfig{
+	objectStorage, err := storage.NewR2Client(rootCtx, storage.R2ClientConfig{
 		AccountID:       cfg.R2AccountID,
 		AccessKeyID:     cfg.R2AccessKeyID,
 		SecretAccessKey: cfg.R2SecretAccessKey,
@@ -80,6 +84,7 @@ func main() {
 		metrics.UploadsTotal,
 		metrics.UploadBytesTotal,
 		metrics.UploadErrorsTotal,
+		log,
 	)
 
 	var cachePurger cloudflare.Purger
@@ -98,12 +103,27 @@ func main() {
 	)
 
 	router := httpserver.NewRouter(httpserver.RouterDependencies{
-		Logger:        log,
-		UploadHandler: uploadHandler,
-		FileHandler:   fileHandler,
-		ConfigHandler: configHandler,
-		AllowedOrigin: cfg.AllowedOrigin,
+		Logger:         log,
+		UploadHandler:  uploadHandler,
+		FileHandler:    fileHandler,
+		ConfigHandler:  configHandler,
+		AllowedOrigin:  cfg.AllowedOrigin,
+		MetricsToken:   cfg.MetricsToken,
+		RequestLatency: metrics.RequestLatency,
 	})
+
+	// Expiry sweeper: this is the primary, application-level enforcement of
+	// file expiry. Any R2 Lifecycle Rule configured on the bucket is
+	// defense-in-depth on top of this, not a substitute for it.
+	expirySweeper := sweeper.New(
+		repository,
+		objectStorage,
+		cachePurger,
+		cfg.CloudflareCacheEnabled,
+		time.Duration(cfg.FileSweepIntervalMins)*time.Minute,
+		log,
+	)
+	go expirySweeper.Run(rootCtx)
 
 	server := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
@@ -126,6 +146,8 @@ func main() {
 	<-shutdownSignal
 
 	log.Info("server_shutting_down")
+
+	cancelRoot()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

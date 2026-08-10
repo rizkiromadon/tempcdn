@@ -65,10 +65,15 @@ func (h *Handler) GetInfo(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	deleteToken := extractDeleteToken(r)
 
-	err := h.service.DeleteBeforeTTL(r.Context(), id)
+	err := h.service.DeleteBeforeTTL(r.Context(), id, deleteToken)
 	if errors.Is(err, ErrNotFound) {
 		response.Error(w, http.StatusNotFound, "file not found")
+		return
+	}
+	if errors.Is(err, ErrInvalidDeleteToken) {
+		response.Error(w, http.StatusForbidden, "invalid or missing delete token")
 		return
 	}
 	if errors.Is(err, ErrAlreadyExpired) {
@@ -81,4 +86,15 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.JSON(w, http.StatusOK, map[string]bool{"deleted": true})
+}
+
+// extractDeleteToken reads the delete-authorization token from either the
+// X-Delete-Token header or a delete_token query parameter, preferring the
+// header since query parameters are more likely to be logged (access logs,
+// browser history, Referer headers).
+func extractDeleteToken(r *http.Request) string {
+	if header := r.Header.Get("X-Delete-Token"); header != "" {
+		return header
+	}
+	return r.URL.Query().Get("delete_token")
 }

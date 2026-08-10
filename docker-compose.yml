@@ -14,11 +14,13 @@ services:
       R2_BUCKET_NAME: ${R2_BUCKET_NAME:-tempcdn-files}
       R2_ENDPOINT: ${R2_ENDPOINT}
       R2_PUBLIC_BASE_URL: ${R2_PUBLIC_BASE_URL}
-      DATABASE_DSN: file:/data/tempcdn.db?cache=shared&_fk=1
+      DATABASE_DSN: file:/data/tempcdn.db?cache=shared&_fk=1&_journal_mode=WAL&_busy_timeout=5000
       FILE_TTL_HOURS: 24
-      RATE_LIMIT_UPLOADS_PER_IP_PER_HOUR: 20
-      RATE_LIMIT_MAX_CONCURRENT_UPLOADS: 50
+      FILE_SWEEP_INTERVAL_MINUTES: 5
+      SERVER_MAX_CONCURRENT_UPLOADS: 50
       IP_HASH_SALT: ${IP_HASH_SALT:-local-dev-salt}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:3000}
+      METRICS_TOKEN: ${METRICS_TOKEN}
       ALLOWED_MIME_TYPES: "image/*,video/*,application/pdf,application/zip,text/plain"
       BLOCKED_EXTENSIONS: ".exe,.bat,.sh,.msi,.dll,.scr"
     volumes:

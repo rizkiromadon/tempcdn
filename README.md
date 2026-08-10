@@ -2,8 +2,12 @@
 
 TempCDN is a login-free file upload backend. Files are stored physically in
 Cloudflare R2, metadata is stored in SQLite, and every file is automatically
-removed after a fixed time-to-live (24 hours by default), enforced by an R2
-Lifecycle Rule with a defensive `expires_at` check in the application layer.
+removed after a fixed time-to-live (24 hours by default). Expiry is enforced
+by an in-process background sweeper that deletes the R2 object and the DB
+row once a file's TTL has passed; an R2 Lifecycle Rule can optionally be
+configured on the bucket as defense-in-depth, but the sweeper — not the
+lifecycle rule — is what the application actually depends on for its core
+"temporary" guarantee.
 
 ## Table of Contents
 
@@ -24,20 +28,24 @@ Lifecycle Rule with a defensive `expires_at` check in the application layer.
 - [Design Notes](#design-notes)
   - [Rate limiting strategy](#rate-limiting-strategy)
   - [Streaming checksum vs. single-read upload](#streaming-checksum-vs-single-read-upload)
+  - [Expiry enforcement](#expiry-enforcement)
 - [Known Limitations](#known-limitations)
 
 ## Features
 
 - Anonymous file upload, no authentication required.
-- Automatic expiry: every uploaded file is deleted 24 hours after upload
-  (configurable) via an R2 Lifecycle Rule, with an application-level
-  `expires_at` guard as a defensive backstop.
+- Automatic expiry: every uploaded file is deleted after its TTL
+  (`FILE_TTL_HOURS`, 24h by default) by a background sweeper that runs every
+  `FILE_SWEEP_INTERVAL_MINUTES`. An R2 Lifecycle Rule can be layered on top
+  as an out-of-band backstop, but is not required for correct behavior.
 - Content-based deduplication: uploading identical file content twice will
   not re-upload the object to R2; the existing record is returned instead.
 - MIME type sniffing and validation based on file content (not just file
   extension), plus a configurable blocked-extension list.
-- Manual early deletion via the API, before the TTL expires.
-- Prometheus metrics and structured JSON logging.
+- Manual early deletion via the API, authorized by a one-time delete token
+  issued at upload time (separate from the public file ID).
+- Prometheus metrics (including per-route request latency) and structured
+  JSON logging.
 - Global concurrency limiter to protect server resources under load.
 
 ## Architecture
@@ -50,6 +58,7 @@ internal/upload         Upload handler, service, validator, checksum logic
 internal/file            File info retrieval and deletion handler/service
 internal/metadata       SQLite repository and file record model
 internal/storage         Object storage interface and Cloudflare R2 client
+internal/sweeper         Background expiry sweeper (deletes expired files)
 internal/ratelimit      In-process concurrency limiter
 internal/idgen           File ID generation
 internal/response        Shared JSON response helpers
@@ -100,12 +109,16 @@ for a ready-to-copy template.
 | `R2_BUCKET_NAME` | `tempcdn-files` | Target R2 bucket name. |
 | `R2_ENDPOINT` | — | R2 S3-compatible endpoint URL. Required. |
 | `R2_PUBLIC_BASE_URL` | — | Public base URL used to build `cdn_url` for uploaded objects. Required. |
-| `DATABASE_DSN` | `file:tempcdn.db?cache=shared&_fk=1` | SQLite DSN. |
+| `DATABASE_DSN` | `file:tempcdn.db?cache=shared&_fk=1&_journal_mode=WAL&_busy_timeout=5000` | SQLite DSN. WAL mode is enabled by default so reads aren't blocked behind writes under concurrent access. |
 | `FILE_TTL_HOURS` | `24` | Hours before an uploaded file expires. |
-| `RATE_LIMIT_MAX_CONCURRENT_UPLOADS` | `50` | Maximum number of uploads processed concurrently by this instance. |
-| `IP_HASH_SALT` | `insecure-default-salt` | Salt used to hash the uploader's IP address before storing it. Set a strong random value in production. |
+| `FILE_SWEEP_INTERVAL_MINUTES` | `5` | How often the background sweeper checks for and deletes expired files. |
+| `SERVER_MAX_CONCURRENT_UPLOADS` | `50` | Maximum number of uploads processed concurrently by this instance. This is a global, process-wide cap — not per-IP rate limiting (see [Rate limiting strategy](#rate-limiting-strategy)). The older name `RATE_LIMIT_MAX_CONCURRENT_UPLOADS` is still read as a fallback for one deprecation cycle. |
+| `IP_HASH_SALT` | — | Salt used to hash the uploader's IP address before storing it. **Required** — the server refuses to start with the well-known default unless `ALLOW_INSECURE_IP_HASH_SALT=true` is also set (local development only). |
+| `ALLOW_INSECURE_IP_HASH_SALT` | `false` | Set to `true` to allow starting without a real `IP_HASH_SALT`. Never set this in production. |
+| `ALLOWED_ORIGIN` | — | Origin allowed to call this API from a browser. Required. |
+| `METRICS_TOKEN` | — | If set, required (as `X-Metrics-Token` header or `Authorization: Bearer`) to read `/metrics`. CORS alone does not stop direct/server-to-server access, so this is the actual access control; leave unset only if `/metrics` is not publicly reachable. |
 | `ALLOWED_MIME_TYPES` | `image/*,video/*,application/pdf,application/zip,text/plain` | Comma-separated list of allowed MIME types/patterns. Supports `type/*` wildcards. |
-| `BLOCKED_EXTENSIONS` | `.exe,.bat,.sh,.msi,.dll,.scr` | Comma-separated list of blocked file extensions. |
+| `BLOCKED_EXTENSIONS` | `.exe,.bat,.sh,.msi,.dll,.scr` | Comma-separated list of blocked file extensions. Matched both as the file's final extension and as a substring earlier in the filename (e.g. `evil.exe.png` is also blocked). |
 
 ## API Reference
 
@@ -134,6 +147,9 @@ Exposes Prometheus metrics (`tempcdn_uploads_total`,
 ```
 GET /metrics
 ```
+
+If `METRICS_TOKEN` is configured, requests must include it as either an
+`X-Metrics-Token` header or an `Authorization: Bearer <token>` header.
 
 ### Upload a File
 
@@ -181,16 +197,24 @@ curl -X POST http://localhost:8080/api/v1/upload \
   "cdn_url": "https://cdn.tempcdn.example.com/2026/08/09/b6b3f6d2-9b1a-4e8b-8a7a-2e6c9e6b0a11.png",
   "created_at": "2026-08-09T10:15:00Z",
   "expires_at": "2026-08-10T10:15:00Z",
-  "duplicate": false
+  "duplicate": false,
+  "delete_token": "6f1c1a6e2e0a4c9f8b1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b"
 }
 ```
+
+`delete_token` is shown **only in this response** — it is not persisted in
+plaintext and cannot be recovered later. Save it if you may need to delete
+the file early; without it, the file can still be read via `GET`, but not
+deleted until it naturally expires. `delete_token` is omitted (empty) when
+`duplicate` is `true`, since the original uploader already holds the real
+one.
 
 **Error responses**
 
 | Status | Condition |
 |---|---|
 | `400 Bad Request` | Missing `file` field, invalid multipart data, file empty, file too large, blocked extension, or disallowed content type. |
-| `503 Service Unavailable` | Server has reached `RATE_LIMIT_MAX_CONCURRENT_UPLOADS` concurrent uploads. Retry shortly. |
+| `503 Service Unavailable` | Server has reached `SERVER_MAX_CONCURRENT_UPLOADS` concurrent uploads. Retry shortly. |
 | `504 Gateway Timeout` | Upload processing exceeded the request deadline. |
 | `500 Internal Server Error` | Unexpected server-side failure. |
 
@@ -241,7 +265,8 @@ curl http://localhost:8080/api/v1/files/b6b3f6d2-9b1a-4e8b-8a7a-2e6c9e6b0a11
 
 ### Delete a File
 
-Deletes a file before its TTL expires.
+Deletes a file before its TTL expires. Requires the delete token returned
+in the original upload response.
 
 ```
 DELETE /api/v1/files/{id}
@@ -253,10 +278,17 @@ DELETE /api/v1/files/{id}
 |---|---|
 | `id` | The file's unique ID. |
 
+**Headers**
+
+| Header | Required | Description |
+|---|---|---|
+| `X-Delete-Token` | Yes | The delete token returned at upload time. Alternatively, pass it as a `delete_token` query parameter, though the header is preferred since query parameters are more likely to end up in access logs or browser history. |
+
 **Example request**
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/files/b6b3f6d2-9b1a-4e8b-8a7a-2e6c9e6b0a11
+curl -X DELETE http://localhost:8080/api/v1/files/b6b3f6d2-9b1a-4e8b-8a7a-2e6c9e6b0a11 \
+  -H "X-Delete-Token: 6f1c1a6e2e0a4c9f8b1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b"
 ```
 
 **Response `200 OK`**
@@ -269,9 +301,15 @@ curl -X DELETE http://localhost:8080/api/v1/files/b6b3f6d2-9b1a-4e8b-8a7a-2e6c9e
 
 | Status | Condition |
 |---|---|
+| `403 Forbidden` | Missing or incorrect delete token. |
 | `404 Not Found` | No file exists with the given ID. |
 | `410 Gone` | File exists but has already expired. |
 | `500 Internal Server Error` | Unexpected server-side failure. |
+
+Knowing a file's ID is not sufficient to delete it — the ID is necessarily
+shared (it's embedded in the CDN URL and the `GET` endpoint), so it doesn't
+double as a delete credential. Only the uploader, who received the delete
+token once at upload time, can delete the file early.
 
 ### Error Format
 
@@ -284,10 +322,15 @@ All error responses share the same JSON shape:
 ### CORS
 
 - `POST /api/v1/upload` and `DELETE /api/v1/files/{id}` use a strict CORS
-  policy — configure the allowed origin before deploying to production.
+  policy, locked to `ALLOWED_ORIGIN` — configure it before deploying to
+  production. The server refuses to start if `ALLOWED_ORIGIN` is unset.
 - `GET /api/v1/files/{id}` uses a permissive CORS policy (`*`), since file
   metadata is not sensitive and is commonly read from arbitrary front-end
   origins.
+- `GET /metrics` uses the strict, `ALLOWED_ORIGIN` CORS policy, plus an
+  optional `METRICS_TOKEN` check that isn't CORS-dependent (see
+  [Metrics](#metrics)) — CORS is a browser-enforced policy only and does
+  nothing to stop direct/server-to-server requests.
 
 ## Design Notes
 
@@ -302,7 +345,7 @@ spoofed if the origin is reachable directly without going through the proxy.
 
 What the backend does provide:
 
-- **A global concurrency limiter** (`RATE_LIMIT_MAX_CONCURRENT_UPLOADS`) —
+- **A global concurrency limiter** (`SERVER_MAX_CONCURRENT_UPLOADS`) —
   this is not per-IP abuse protection, but a pure stability safety net that
   prevents too many parallel uploads from exhausting memory, goroutines, or
   file descriptors.
@@ -345,13 +388,41 @@ twice, and `PutObject` is genuinely skipped for duplicates), with the
 trade-off that the file briefly resides on the server's local disk during
 the upload process, rather than being piped purely memory-to-memory.
 
+### Expiry enforcement
+
+Expiry is enforced by `internal/sweeper`, a ticker-driven background
+goroutine started in `main.go` that runs every `FILE_SWEEP_INTERVAL_MINUTES`
+(default 5). Each tick:
+
+1. Queries up to 100 records whose `expires_at` has passed, oldest first.
+2. Deletes the R2 object for each. If this fails, the DB row is left in
+   place so the record is retried on the next tick rather than the app
+   losing track of an object that's still live in the bucket.
+3. Deletes the corresponding DB row.
+4. If Cloudflare cache purging is enabled, purges the deleted files' CDN
+   URLs from the edge cache in one batched request.
+
+The sweeper runs an initial pass immediately on startup (not just on the
+first tick) so files that expired while the process was down don't linger
+longer than necessary. An R2 Lifecycle Rule configured on the bucket
+directly is a reasonable defense-in-depth addition on top of this, but the
+application does not depend on one being configured correctly — the sweeper
+is the actual, verifiable enforcement mechanism.
+
 ## Known Limitations
 
-- `go.sum` is not committed and must be generated by running `go mod tidy`
-  on a machine with network access before running `go build` or `go test`.
+- `go.sum` is not committed. The Dockerfile will fall back to `go mod tidy`
+  when it detects no `go.sum` is present, but for fully reproducible,
+  offline-cacheable builds, generate and commit one with `go mod tidy` on a
+  machine with network access, then remove that fallback from the
+  Dockerfile.
 - The concurrency limiter is in-memory and per-instance. For real horizontal
   scaling, replace it with a Redis-backed limiter so behavior stays
   consistent across instances.
-- The strict CORS policy currently defaults to an empty allowed origin
-  (`StrictCORS("")`). Set a specific origin via configuration before
-  deploying to production.
+- The expiry sweeper runs in-process on a single instance's ticker. If you
+  run multiple replicas of this service against the same database, every
+  replica currently runs its own sweep independently; deletions are
+  idempotent (a second attempt to delete an already-gone R2 object or DB row
+  is harmless), but this means redundant work rather than a single
+  coordinated sweeper. For larger deployments, consider moving the sweep to
+  a dedicated single-replica job.
