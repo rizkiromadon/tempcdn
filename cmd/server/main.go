@@ -15,6 +15,7 @@ import (
 	"github.com/tempcdn/tempcdn/internal/logger"
 	"github.com/tempcdn/tempcdn/internal/metadata"
 	"github.com/tempcdn/tempcdn/internal/ratelimit"
+	"github.com/tempcdn/tempcdn/internal/stats"
 	"github.com/tempcdn/tempcdn/internal/storage"
 	"github.com/tempcdn/tempcdn/internal/sweeper"
 	"github.com/tempcdn/tempcdn/internal/upload"
@@ -102,11 +103,19 @@ func main() {
 		cfg.FileTTLHours,
 	)
 
+	statsHandler := stats.NewHandler(
+		repository,
+		metrics.UploadsTotal,
+		metrics.UploadBytesTotal,
+		metrics.UploadErrorsTotal,
+	)
+
 	router := httpserver.NewRouter(httpserver.RouterDependencies{
 		Logger:         log,
 		UploadHandler:  uploadHandler,
 		FileHandler:    fileHandler,
 		ConfigHandler:  configHandler,
+		StatsHandler:   statsHandler,
 		AllowedOrigin:  cfg.AllowedOrigin,
 		MetricsToken:   cfg.MetricsToken,
 		RequestLatency: metrics.RequestLatency,

@@ -21,6 +21,7 @@ lifecycle rule — is what the application actually depends on for its core
 - [API Reference](#api-reference)
   - [Health Check](#health-check)
   - [Metrics](#metrics)
+  - [Stats](#stats)
   - [Upload a File](#upload-a-file)
   - [Get File Info](#get-file-info)
   - [Delete a File](#delete-a-file)
@@ -56,6 +57,7 @@ internal/config        Environment-based configuration loading
 internal/httpserver     Router, middleware (logging, recovery, CORS), metrics
 internal/upload         Upload handler, service, validator, checksum logic
 internal/file            File info retrieval and deletion handler/service
+internal/stats           Public usage-summary handler (GET /api/v1/stats)
 internal/metadata       SQLite repository and file record model
 internal/storage         Object storage interface and Cloudflare R2 client
 internal/sweeper         Background expiry sweeper (deletes expired files)
@@ -150,6 +152,41 @@ GET /metrics
 
 If `METRICS_TOKEN` is configured, requests must include it as either an
 `X-Metrics-Token` header or an `Authorization: Bearer <token>` header.
+
+### Stats
+
+Returns a JSON usage summary. Unlike `/metrics` (Prometheus text exposition
+format, optionally token-gated), this endpoint is plain JSON and always
+public, like `/config` — it's aggregate/non-sensitive usage data, not
+per-file detail.
+
+```
+GET /api/v1/stats
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "active_file_count": 42,
+  "active_bytes": 104857600,
+  "average_file_bytes": 2496609,
+  "content_type_breakdown": { "image": 30, "video": 10, "other": 2 },
+  "lifetime_uploads_total": 1337,
+  "lifetime_upload_bytes_total": 5368709120,
+  "lifetime_upload_errors_total": 12,
+  "generated_at": "2026-08-10T09:00:00Z"
+}
+```
+
+- `active_*` and `content_type_breakdown` reflect files that exist in the
+  metadata store right now — they fall as files expire or are deleted early,
+  the same way `GET /api/v1/files/{id}` would stop finding them.
+- `lifetime_*` fields are sourced from the same Prometheus counters backing
+  `/metrics` (`tempcdn_uploads_total`, `tempcdn_upload_bytes_total`,
+  `tempcdn_upload_errors_total`). They only increase — they are **not**
+  reduced when files expire or are deleted — and reset to `0` on process
+  restart, since they aren't persisted independently of the metadata store.
 
 ### Upload a File
 
@@ -331,6 +368,8 @@ All error responses share the same JSON shape:
   optional `METRICS_TOKEN` check that isn't CORS-dependent (see
   [Metrics](#metrics)) — CORS is a browser-enforced policy only and does
   nothing to stop direct/server-to-server requests.
+- `GET /api/v1/stats` uses the strict, `ALLOWED_ORIGIN` CORS policy, same as
+  `/config` — no token, since the data it returns is aggregate/non-sensitive.
 
 ## Design Notes
 

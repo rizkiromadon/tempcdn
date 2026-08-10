@@ -228,6 +228,91 @@ func TestFindExpiredReturnsOnlyExpiredRecordsOldestFirst(t *testing.T) {
 	}
 }
 
+func sampleRecordWithContentType(id string, checksum string, contentType string, sizeBytes int64, createdAt time.Time, ttl time.Duration) *FileRecord {
+	record := sampleRecord(id, checksum, createdAt, ttl)
+	record.ContentType = contentType
+	record.SizeBytes = sizeBytes
+	return record
+}
+
+func TestStatsCountsOnlyActiveRecords(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	active := sampleRecordWithContentType("id-active", "checksum-active", "image/png", 1000, now, 24*time.Hour)
+	if err := repo.Insert(ctx, active); err != nil {
+		t.Fatalf("insert active record failed: %v", err)
+	}
+
+	expired := sampleRecordWithContentType("id-expired", "checksum-expired", "image/png", 5000, now.Add(-48*time.Hour), 1*time.Hour)
+	if err := repo.Insert(ctx, expired); err != nil {
+		t.Fatalf("insert expired record failed: %v", err)
+	}
+
+	got, err := repo.Stats(ctx, now)
+	if err != nil {
+		t.Fatalf("stats failed: %v", err)
+	}
+	if got.ActiveFileCount != 1 {
+		t.Errorf("expected 1 active file, got %d", got.ActiveFileCount)
+	}
+	if got.ActiveBytes != 1000 {
+		t.Errorf("expected 1000 active bytes (expired record excluded), got %d", got.ActiveBytes)
+	}
+}
+
+func TestStatsBreaksDownByTopLevelContentType(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	records := []*FileRecord{
+		sampleRecordWithContentType("id-png", "checksum-png", "image/png", 100, now, 24*time.Hour),
+		sampleRecordWithContentType("id-jpeg", "checksum-jpeg", "image/jpeg", 200, now, 24*time.Hour),
+		sampleRecordWithContentType("id-mp4", "checksum-mp4", "video/mp4", 300, now, 24*time.Hour),
+		sampleRecordWithContentType("id-malformed", "checksum-malformed", "not-a-mime-type", 400, now, 24*time.Hour),
+	}
+	for _, record := range records {
+		if err := repo.Insert(ctx, record); err != nil {
+			t.Fatalf("insert %s failed: %v", record.ID, err)
+		}
+	}
+
+	got, err := repo.Stats(ctx, now)
+	if err != nil {
+		t.Fatalf("stats failed: %v", err)
+	}
+	if got.ActiveFileCount != 4 {
+		t.Fatalf("expected 4 active files, got %d", got.ActiveFileCount)
+	}
+	if got.ContentTypeBreakdown["image"] != 2 {
+		t.Errorf("expected 2 image files, got %d", got.ContentTypeBreakdown["image"])
+	}
+	if got.ContentTypeBreakdown["video"] != 1 {
+		t.Errorf("expected 1 video file, got %d", got.ContentTypeBreakdown["video"])
+	}
+	if got.ContentTypeBreakdown["other"] != 1 {
+		t.Errorf("expected 1 file grouped under 'other' for malformed content type, got %d", got.ContentTypeBreakdown["other"])
+	}
+}
+
+func TestStatsOnEmptyTableReturnsZeroesNotError(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+
+	got, err := repo.Stats(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("stats on empty table failed: %v", err)
+	}
+	if got.ActiveFileCount != 0 || got.ActiveBytes != 0 {
+		t.Errorf("expected zero counts on empty table, got count=%d bytes=%d", got.ActiveFileCount, got.ActiveBytes)
+	}
+	if len(got.ContentTypeBreakdown) != 0 {
+		t.Errorf("expected empty breakdown on empty table, got %v", got.ContentTypeBreakdown)
+	}
+}
+
 func TestFindExpiredRespectsLimit(t *testing.T) {
 	repo := newTestRepository(t)
 	ctx := context.Background()

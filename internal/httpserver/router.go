@@ -11,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tempcdn/tempcdn/internal/file"
 	"github.com/tempcdn/tempcdn/internal/response"
+	"github.com/tempcdn/tempcdn/internal/stats"
 	"github.com/tempcdn/tempcdn/internal/upload"
 )
 
@@ -19,6 +20,7 @@ type RouterDependencies struct {
 	UploadHandler *upload.Handler
 	FileHandler   *file.Handler
 	ConfigHandler *upload.ConfigHandler
+	StatsHandler  *stats.Handler
 	AllowedOrigin string
 	// MetricsToken, if non-empty, is required as a Bearer token (or
 	// X-Metrics-Token header) on /metrics requests. CORS alone is a
@@ -70,6 +72,14 @@ func NewRouter(deps RouterDependencies) http.Handler {
 
 		apiRouter.With(getCORS).Get("/config", deps.ConfigHandler.ServeHTTP)
 		apiRouter.Options("/config", getCORS(noop).ServeHTTP)
+
+		// /stats is public, like /config: it's a usage summary (active file
+		// counts/bytes, content-type breakdown, lifetime upload totals), not
+		// sensitive per-file data, so it uses the same strict-but-open
+		// ALLOWED_ORIGIN CORS policy rather than the token-gated /metrics
+		// policy.
+		apiRouter.With(getCORS).Get("/stats", deps.StatsHandler.ServeHTTP)
+		apiRouter.Options("/stats", getCORS(noop).ServeHTTP)
 	})
 
 	return router

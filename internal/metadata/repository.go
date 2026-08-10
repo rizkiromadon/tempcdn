@@ -6,6 +6,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -26,7 +27,27 @@ type Repository interface {
 	// before "before", for the background expiry sweep. Ordered oldest
 	// expiry first so the most overdue records are cleaned up first.
 	FindExpired(ctx context.Context, before time.Time, limit int) ([]*FileRecord, error)
+	// Stats aggregates the files table as of "now": only rows that are
+	// currently active (expires_at > now) are counted, since expired/deleted
+	// rows are physically removed by the sweeper and DELETE /files/{id} (see
+	// DeleteByID) rather than flagged - the table never holds a lifetime
+	// history. Callers wanting lifetime totals must combine this with a
+	// monotonically-increasing counter recorded at upload time (see
+	// httpserver.Metrics), not with this table.
+	Stats(ctx context.Context, now time.Time) (*Stats, error)
 	Close() error
+}
+
+// Stats holds aggregate figures over the files currently active in the
+// table (see Repository.Stats).
+type Stats struct {
+	ActiveFileCount int64
+	ActiveBytes     int64
+	// ContentTypeBreakdown maps top-level MIME type (the part before "/",
+	// e.g. "image", "video", "application") to the number of active files
+	// of that type. An empty or malformed content_type is grouped under
+	// "other".
+	ContentTypeBreakdown map[string]int64
 }
 
 type SQLiteRepository struct {
@@ -207,6 +228,61 @@ func (r *SQLiteRepository) FindExpired(ctx context.Context, before time.Time, li
 		return nil, fmt.Errorf("iterate expired file records: %w", err)
 	}
 	return records, nil
+}
+
+// Stats aggregates currently-active rows (expires_at > now) in a single pass
+// plus a per-row content_type scan, rather than N+1 queries, since the table
+// is expected to stay small (active temporary files only) and this keeps the
+// endpoint to two queries total regardless of row count.
+func (r *SQLiteRepository) Stats(ctx context.Context, now time.Time) (*Stats, error) {
+	stats := &Stats{ContentTypeBreakdown: make(map[string]int64)}
+
+	summaryRow := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
+		FROM files
+		WHERE expires_at > ?
+	`, now)
+	if err := summaryRow.Scan(&stats.ActiveFileCount, &stats.ActiveBytes); err != nil {
+		return nil, fmt.Errorf("scan active file summary: %w", err)
+	}
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT content_type, COUNT(*)
+		FROM files
+		WHERE expires_at > ?
+		GROUP BY content_type
+	`, now)
+	if err != nil {
+		return nil, fmt.Errorf("query content type breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var contentType string
+		var count int64
+		if err := rows.Scan(&contentType, &count); err != nil {
+			return nil, fmt.Errorf("scan content type breakdown row: %w", err)
+		}
+		stats.ContentTypeBreakdown[topLevelMimeType(contentType)] += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate content type breakdown: %w", err)
+	}
+
+	return stats, nil
+}
+
+// topLevelMimeType returns the part of a MIME type before "/" (e.g.
+// "image/png" -> "image"), grouping multiple subtypes of the same media
+// category together in the breakdown. Empty or malformed values (no "/")
+// fall back to "other" rather than being silently dropped or panicking on a
+// missing separator.
+func topLevelMimeType(contentType string) string {
+	slashIndex := strings.IndexByte(contentType, '/')
+	if slashIndex <= 0 {
+		return "other"
+	}
+	return contentType[:slashIndex]
 }
 
 func (r *SQLiteRepository) DeleteByID(ctx context.Context, id string) error {
