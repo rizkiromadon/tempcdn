@@ -5,13 +5,21 @@
 -- handled elsewhere - the plaintext token is returned to the uploader
 -- exactly once, in the upload response, and never persisted or logged.
 --
--- "IF NOT EXISTS" is required here (unlike a typical migration) because
--- this repository's Migrate() re-executes every file in migrations/ on
--- every process startup rather than tracking which have already been
--- applied (see internal/metadata/repository.go) - without it, this
--- statement would fail on the second startup once the column already
--- exists. Requires SQLite 3.35+ (bundled by github.com/mattn/go-sqlite3
--- v1.14.22, which ships SQLite 3.44).
-ALTER TABLE files ADD COLUMN IF NOT EXISTS delete_token_hash TEXT NOT NULL DEFAULT '';
-
-CREATE INDEX IF NOT EXISTS idx_files_delete_token_hash ON files (delete_token_hash);
+-- This file intentionally contains no SQL. Both the "delete_token_hash"
+-- column and its index are created in Go by
+-- SQLiteRepository.Migrate()/ensureColumn() (see repository.go), not here:
+--
+--   1. "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" requires SQLite 3.35+,
+--      which isn't guaranteed across every go-sqlite3 build (this is what
+--      broke here originally - see git history).
+--   2. Migrate() has no applied-migrations tracking table - it re-runs
+--      every *.sql file in this directory on every process startup, so a
+--      plain "ALTER TABLE ADD COLUMN" would fail on the second startup
+--      once the column already exists.
+--   3. The index needs the column to exist first, which means it can't be
+--      plain SQL executed in the same file-list pass as 0001_init.sql
+--      (which only creates the table) without introducing an ordering
+--      dependency between migration files that this runner doesn't model.
+--
+-- Kept as an empty (comment-only) file rather than deleted, to preserve
+-- the historical migration sequence and the intent it documents.

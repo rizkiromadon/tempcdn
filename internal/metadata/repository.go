@@ -59,6 +59,74 @@ func (r *SQLiteRepository) Migrate(ctx context.Context) error {
 			return fmt.Errorf("apply migration %s: %w", entry.Name(), err)
 		}
 	}
+
+	// ALTER TABLE ADD COLUMN cannot be expressed idempotently in portable
+	// SQL here: "ADD COLUMN IF NOT EXISTS" requires SQLite 3.35+, which is
+	// not guaranteed across every build of github.com/mattn/go-sqlite3, and
+	// Migrate() has no applied-migrations tracking table - it re-runs every
+	// file in migrations/ on every process startup (see the loop above), so
+	// a plain ALTER TABLE ADD COLUMN would fail on the second startup once
+	// the column already exists. Checked and applied here in Go instead, so
+	// it stays safe to call Migrate() repeatedly regardless of the SQLite
+	// version in use. This must run after the migration file loop above
+	// (which creates the "files" table) and before the index below (which
+	// references the column this adds).
+	if err := r.ensureColumn(ctx, "files", "delete_token_hash", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("ensure delete_token_hash column: %w", err)
+	}
+
+	if _, err := r.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_files_delete_token_hash ON files (delete_token_hash)`); err != nil {
+		return fmt.Errorf("create delete_token_hash index: %w", err)
+	}
+
+	return nil
+}
+
+// ensureColumn adds columnDef to table if a column named columnName doesn't
+// already exist, making ALTER TABLE ADD COLUMN safe to call on every
+// startup regardless of SQLite version.
+func (r *SQLiteRepository) ensureColumn(ctx context.Context, table string, columnName string, columnDef string) error {
+	rows, err := r.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("read table info for %s: %w", table, err)
+	}
+
+	exists := false
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan table_info row for %s: %w", table, err)
+		}
+		if name == columnName {
+			exists = true
+			break
+		}
+	}
+	rowsErr := rows.Err()
+	// Close explicitly, before issuing the ALTER TABLE below, rather than
+	// relying on a deferred Close at function return: the connection pool
+	// is capped at 1 (see NewSQLiteRepository), so an ALTER TABLE issued
+	// while these rows are still open would block waiting for a connection
+	// that this same call is holding.
+	if closeErr := rows.Close(); closeErr != nil {
+		return fmt.Errorf("close table_info rows for %s: %w", table, closeErr)
+	}
+	if rowsErr != nil {
+		return fmt.Errorf("iterate table_info for %s: %w", table, rowsErr)
+	}
+	if exists {
+		return nil
+	}
+
+	alterSQL := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, columnName, columnDef)
+	if _, err := r.db.ExecContext(ctx, alterSQL); err != nil {
+		return fmt.Errorf("add column %s to %s: %w", columnName, table, err)
+	}
 	return nil
 }
 

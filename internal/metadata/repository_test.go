@@ -22,12 +22,16 @@ func newTestRepository(t *testing.T) *SQLiteRepository {
 	return repo
 }
 
-// TestMigrateIsIdempotent guards against a real regression: Migrate() has no
-// applied-migrations tracking table and simply re-executes every file in
-// migrations/ on every process startup (see repository.go), so every
-// individual migration statement must itself be safe to run more than once
-// (CREATE TABLE/INDEX IF NOT EXISTS, ALTER TABLE ADD COLUMN IF NOT EXISTS,
-// etc). A restart of the server is exactly the scenario that would hit this.
+// TestMigrateIsIdempotent guards against a real regression that shipped
+// once already: Migrate() has no applied-migrations tracking table and
+// simply re-executes every file in migrations/ on every process startup
+// (see repository.go), so every individual step must itself be safe to run
+// more than once - plain SQL via CREATE TABLE/INDEX IF NOT EXISTS, and the
+// delete_token_hash column via ensureColumn(), which checks PRAGMA
+// table_info() before altering rather than relying on "ADD COLUMN IF NOT
+// EXISTS" (that SQLite 3.35+ syntax isn't available on every go-sqlite3
+// build - it broke exactly this way once). A restart of the server is
+// exactly the scenario that would hit this.
 func TestMigrateIsIdempotent(t *testing.T) {
 	repo, err := NewSQLiteRepository("file::memory:?cache=shared")
 	if err != nil {
@@ -41,6 +45,45 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 	if err := repo.Migrate(ctx); err != nil {
 		t.Fatalf("second migrate (simulating a server restart) failed: %v", err)
+	}
+}
+
+// TestEnsureColumnDoesNotDeadlockOnSingleConnectionPool exercises the fix
+// for the specific bug this guarded against: SetMaxOpenConns(1) means only
+// one connection exists for the whole process, so ensureColumn's PRAGMA
+// table_info query must be fully closed before it issues ALTER TABLE on
+// that same connection, or the ALTER TABLE blocks forever waiting for a
+// connection that ensureColumn itself is still holding.
+func TestEnsureColumnDoesNotDeadlockOnSingleConnectionPool(t *testing.T) {
+	repo, err := NewSQLiteRepository("file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("failed to create repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	if _, err := repo.db.ExecContext(ctx, `CREATE TABLE widgets (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatalf("failed to create test table: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- repo.ensureColumn(ctx, "widgets", "extra_field", "TEXT NOT NULL DEFAULT ''")
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ensureColumn failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ensureColumn appears to have deadlocked")
+	}
+
+	// A second call must be a no-op (column now exists) and must not
+	// deadlock either.
+	if err := repo.ensureColumn(ctx, "widgets", "extra_field", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		t.Fatalf("second ensureColumn call failed: %v", err)
 	}
 }
 
