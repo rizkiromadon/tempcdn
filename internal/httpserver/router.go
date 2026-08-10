@@ -55,11 +55,18 @@ func NewRouter(deps RouterDependencies) http.Handler {
 
 		apiRouter.With(fileGetCORS).Get("/files/{id}", deps.FileHandler.GetInfo)
 		apiRouter.With(fileDeleteCORS).Delete("/files/{id}", deps.FileHandler.Delete)
-		// Preflight (OPTIONS) can't know in advance whether the browser's
-		// real request will be GET or DELETE, so it responds with the more
-		// permissive GET policy here; actual enforcement happens on the
-		// real GET/DELETE response via fileGetCORS/fileDeleteCORS above.
-		apiRouter.Options("/files/{id}", fileGetCORS(noop).ServeHTTP)
+		// Preflight (OPTIONS) must mirror whichever policy will actually
+		// govern the real request, chosen via the browser-sent
+		// Access-Control-Request-Method header. Previously this always
+		// replied with the GET policy (Allow-Methods: GET, OPTIONS), which
+		// does not list DELETE - per the CORS spec, browsers reject the
+		// preflight (and therefore the real DELETE call) whenever the
+		// requested method isn't in Allow-Methods, breaking browser-based
+		// delete entirely regardless of origin. Dispatching by requested
+		// method lets GET preflights stay permissive (*) while DELETE
+		// preflights stay locked to ALLOWED_ORIGIN, matching the real
+		// GET/DELETE responses below.
+		apiRouter.Options("/files/{id}", filePreflightCORS(fileGetCORS, fileDeleteCORS, noop).ServeHTTP)
 
 		apiRouter.With(getCORS).Get("/config", deps.ConfigHandler.ServeHTTP)
 		apiRouter.Options("/config", getCORS(noop).ServeHTTP)
@@ -72,6 +79,23 @@ func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// filePreflightCORS dispatches an OPTIONS preflight for /files/{id} to the
+// CORS policy matching the method the browser is asking to preflight for
+// (via Access-Control-Request-Method), so the preflight response's
+// Allow-Origin/Allow-Methods actually matches what the subsequent real
+// request will receive. GET (or a missing/unrecognized method - e.g. a
+// non-CORS or manually-issued OPTIONS request) falls back to the
+// permissive getCORS policy; DELETE gets the strict deleteCORS policy.
+func filePreflightCORS(getCORS, deleteCORS func(http.Handler) http.Handler, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Access-Control-Request-Method") == http.MethodDelete {
+			deleteCORS(next).ServeHTTP(w, r)
+			return
+		}
+		getCORS(next).ServeHTTP(w, r)
+	})
 }
 
 // metricsAuth requires a shared-secret token on /metrics, since CORS is a
