@@ -54,6 +54,18 @@ type SQLiteRepository struct {
 	db *sql.DB
 }
 
+// NewRepository picks a Repository implementation based on the shape of
+// dsn: a "postgres://" or "postgresql://" DSN returns a PostgresRepository
+// (for multi-instance deployments sharing one database - see
+// PostgresRepository's doc comment), anything else is treated as a SQLite
+// DSN and returns a SQLiteRepository (for a single standalone instance).
+func NewRepository(ctx context.Context, dsn string) (Repository, error) {
+	if isPostgresDSN(dsn) {
+		return NewPostgresRepository(ctx, dsn)
+	}
+	return NewSQLiteRepository(dsn)
+}
+
 func NewSQLiteRepository(dsn string) (*SQLiteRepository, error) {
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {

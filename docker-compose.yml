@@ -1,3 +1,5 @@
+# Single standalone instance with local SQLite. For multiple instances
+# (e.g. srv1/srv2/srv3) sharing one metadata store, see docker-compose.multi.yml.
 services:
   tempcdn:
     build:

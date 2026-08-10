@@ -35,7 +35,12 @@ func main() {
 	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	defer cancelRoot()
 
-	repository, err := metadata.NewSQLiteRepository(cfg.DatabaseDSN)
+	// DATABASE_DSN selects the backend: a "postgres://" or "postgresql://"
+	// DSN uses PostgresRepository (required when running more than one
+	// tempcdn instance against shared metadata, e.g. srv1/srv2/srv3 behind
+	// a rotating frontend); anything else is treated as a SQLite DSN via
+	// SQLiteRepository, appropriate only for a single standalone instance.
+	repository, err := metadata.NewRepository(rootCtx, cfg.DatabaseDSN)
 	if err != nil {
 		log.Error("failed to initialize metadata repository", "error", err)
 		os.Exit(1)

@@ -1,0 +1,93 @@
+# Example: three tempcdn instances (srv1/srv2/srv3) sharing one Postgres
+# database for metadata, matching a deployment where the frontend rotates
+# requests across srv1.tempcdn.eu.cc / srv2.tempcdn.eu.cc / srv3.tempcdn.eu.cc.
+#
+# In a real multi-server deployment, srv1/srv2/srv3 are separate physical
+# hosts, not services in one compose file - this file is meant to be run
+# on ONE host to sanity-check the shared-Postgres setup locally, or as a
+# reference for what environment each real host needs. On each real host,
+# run only the "tempcdn" service (this project's existing Dockerfile),
+# pointing DATABASE_DSN at the one shared Postgres instance (e.g. a managed
+# database, or a Postgres you run on one of the three hosts and open up to
+# the other two).
+#
+# All three app instances MUST use the same R2 bucket (already true - R2 is
+# shared object storage regardless of how many app instances there are) and
+# the same IP_HASH_SALT (otherwise the same uploader IP hashes differently
+# per instance, which is harmless for correctness but makes per-uploader
+# stats inconsistent across servers).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tempcdn
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
+      POSTGRES_DB: tempcdn
+    volumes:
+      - tempcdn-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tempcdn"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  tempcdn-srv1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8080"
+    environment: &tempcdn-common-env
+      SERVER_PORT: 8080
+      SERVER_MAX_UPLOAD_MB: 100
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-tempcdn-files}
+      R2_ENDPOINT: ${R2_ENDPOINT}
+      R2_PUBLIC_BASE_URL: ${R2_PUBLIC_BASE_URL}
+      # All three instances point at the SAME Postgres database - this is
+      # what makes metadata consistent regardless of which srv a request
+      # (or the frontend's rotation) lands on.
+      DATABASE_DSN: postgres://tempcdn:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/tempcdn?sslmode=disable
+      FILE_TTL_HOURS: 24
+      FILE_SWEEP_INTERVAL_MINUTES: 5
+      SERVER_MAX_CONCURRENT_UPLOADS: 50
+      # Must be identical across all instances - see comment above.
+      IP_HASH_SALT: ${IP_HASH_SALT:-local-dev-salt}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:3000}
+      METRICS_TOKEN: ${METRICS_TOKEN}
+      ALLOWED_MIME_TYPES: "image/*,video/*,application/pdf,application/zip,text/plain"
+      BLOCKED_EXTENSIONS: ".exe,.bat,.sh,.msi,.dll,.scr"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tempcdn-srv2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8080"
+    environment: *tempcdn-common-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tempcdn-srv3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8083:8080"
+    environment: *tempcdn-common-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  tempcdn-postgres-data:
