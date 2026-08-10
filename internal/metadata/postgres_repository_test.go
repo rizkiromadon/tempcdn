@@ -46,8 +46,10 @@ func newTestPostgresRepository(t *testing.T) *PostgresRepository {
 	return repo
 }
 
-// TestPostgresMigrateIsIdempotent mirrors TestMigrateIsIdempotent for
-// SQLite: Migrate() must be safe to call again on every process restart.
+// TestPostgresMigrateIsIdempotent guards against a real regression that
+// shipped once already: Migrate() must be safe to call again on every
+// process restart, since a restart of the server is exactly the scenario
+// that would hit this.
 func TestPostgresMigrateIsIdempotent(t *testing.T) {
 	repo := newTestPostgresRepository(t)
 	ctx := context.Background()

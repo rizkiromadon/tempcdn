@@ -17,8 +17,8 @@ import (
 )
 
 // batchSize caps how many expired records are processed per tick, so a large
-// backlog (e.g. after downtime) doesn't hold the single SQLite connection
-// for an unbounded amount of time in one query.
+// backlog (e.g. after downtime) doesn't hold a database connection for an
+// unbounded amount of time in one query.
 const batchSize = 100
 
 type Sweeper struct {

@@ -21,7 +21,7 @@ RUN if [ -s go.sum ]; then \
       go mod tidy && go mod download; \
     fi
 
-RUN CGO_ENABLED=1 GOOS=linux go build -o /build/tempcdn-server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -o /build/tempcdn-server ./cmd/server
 
 FROM debian:bookworm-slim
 

@@ -36,11 +36,10 @@ func main() {
 	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	defer cancelRoot()
 
-	// DATABASE_DSN selects the backend: a "postgres://" or "postgresql://"
-	// DSN uses PostgresRepository (required when running more than one
-	// tempcdn instance against shared metadata, e.g. srv1/srv2/srv3 behind
-	// a rotating frontend); anything else is treated as a SQLite DSN via
-	// SQLiteRepository, appropriate only for a single standalone instance.
+	// DATABASE_DSN must be a "postgres://" or "postgresql://" connection
+	// string: Postgres is required for every deployment, including a
+	// single standalone instance, not just multi-instance setups (e.g.
+	// srv1/srv2/srv3 behind a rotating frontend).
 	repository, err := metadata.NewRepository(rootCtx, cfg.DatabaseDSN)
 	if err != nil {
 		log.Error("failed to initialize metadata repository", "error", err)
@@ -119,9 +118,8 @@ func main() {
 	// Node liveness: lets every instance sharing DATABASE_DSN (e.g.
 	// srv1/srv2/srv3 behind a rotating frontend) push its own heartbeat and
 	// have any still-live instance flag a node offline once its heartbeat
-	// goes stale. Meaningful primarily under PostgresRepository - a single
-	// SQLiteRepository instance still reports its own row, it just never
-	// sees any peers.
+	// goes stale. A single standalone instance still reports its own row,
+	// it just never sees any peers.
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Error("failed to read hostname", "error", err)

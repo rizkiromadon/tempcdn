@@ -1,6 +1,21 @@
-# Single standalone instance with local SQLite. For multiple instances
+# Single standalone instance, backed by Postgres. For multiple instances
 # (e.g. srv1/srv2/srv3) sharing one metadata store, see docker-compose.multi.yml.
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tempcdn
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
+      POSTGRES_DB: tempcdn
+    volumes:
+      - tempcdn-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tempcdn"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   tempcdn:
     build:
       context: .
@@ -16,7 +31,7 @@ services:
       R2_BUCKET_NAME: ${R2_BUCKET_NAME:-tempcdn-files}
       R2_ENDPOINT: ${R2_ENDPOINT}
       R2_PUBLIC_BASE_URL: ${R2_PUBLIC_BASE_URL}
-      DATABASE_DSN: file:/data/tempcdn.db?cache=shared&_fk=1&_journal_mode=WAL&_busy_timeout=5000
+      DATABASE_DSN: postgres://tempcdn:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/tempcdn?sslmode=disable
       FILE_TTL_HOURS: 24
       FILE_SWEEP_INTERVAL_MINUTES: 5
       SERVER_MAX_CONCURRENT_UPLOADS: 50
@@ -25,9 +40,10 @@ services:
       METRICS_TOKEN: ${METRICS_TOKEN}
       ALLOWED_MIME_TYPES: "image/*,video/*,application/pdf,application/zip,text/plain"
       BLOCKED_EXTENSIONS: ".exe,.bat,.sh,.msi,.dll,.scr"
-    volumes:
-      - tempcdn-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  tempcdn-data:
+  tempcdn-postgres-data:

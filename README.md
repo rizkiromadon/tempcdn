@@ -1,8 +1,8 @@
 # TempCDN Backend
 
 TempCDN is a login-free file upload backend. Files are stored physically in
-Cloudflare R2, metadata is stored in SQLite (single instance) or Postgres
-(multiple instances sharing one metadata store), and every file is
+Cloudflare R2, metadata is stored in Postgres (a single standalone instance
+or multiple instances sharing one metadata store), and every file is
 automatically removed after a fixed time-to-live (24 hours by default).
 Expiry is enforced by an in-process background sweeper that deletes the R2
 object and the DB row once a file's TTL has passed; an R2 Lifecycle Rule can
@@ -59,7 +59,7 @@ internal/httpserver     Router, middleware (logging, recovery, CORS), metrics
 internal/upload         Upload handler, service, validator, checksum logic
 internal/file            File info retrieval and deletion handler/service
 internal/stats           Public usage-summary handler (GET /api/v1/stats)
-internal/metadata       SQLite and Postgres repositories and file record model
+internal/metadata       Postgres repository and file record model
 internal/storage         Object storage interface and Cloudflare R2 client
 internal/sweeper         Background expiry sweeper (deletes expired files)
 internal/ratelimit      In-process concurrency limiter
@@ -112,7 +112,7 @@ for a ready-to-copy template.
 | `R2_BUCKET_NAME` | `tempcdn-files` | Target R2 bucket name. |
 | `R2_ENDPOINT` | — | R2 S3-compatible endpoint URL. Required. |
 | `R2_PUBLIC_BASE_URL` | — | Public base URL used to build `cdn_url` for uploaded objects. Required. |
-| `DATABASE_DSN` | `file:tempcdn.db?cache=shared&_fk=1&_journal_mode=WAL&_busy_timeout=5000` | SQLite DSN by default (single instance only). For multiple instances sharing one metadata store, use a `postgres://` or `postgresql://` DSN instead — this switches to `PostgresRepository` automatically. See "Running Multiple Instances" below. |
+| `DATABASE_DSN` | — | **Required.** Postgres connection string (`postgres://` or `postgresql://`). Required for every deployment, including a single standalone instance. For multiple instances sharing one metadata store, point every instance at the same database. See "Running Multiple Instances" below. |
 | `FILE_TTL_HOURS` | `24` | Hours before an uploaded file expires. |
 | `FILE_SWEEP_INTERVAL_MINUTES` | `5` | How often the background sweeper checks for and deletes expired files. |
 | `SERVER_MAX_CONCURRENT_UPLOADS` | `50` | Maximum number of uploads processed concurrently by this instance. This is a global, process-wide cap — not per-IP rate limiting (see [Rate limiting strategy](#rate-limiting-strategy)). The older name `RATE_LIMIT_MAX_CONCURRENT_UPLOADS` is still read as a fallback for one deprecation cycle. |
@@ -475,8 +475,8 @@ is the actual, verifiable enforcement mechanism.
   instance's sweeper still ticks independently, but `FindExpired` uses
   `FOR UPDATE SKIP LOCKED` so two instances can never both claim the same
   expired row in overlapping sweeps — redundant *ticks* still happen, but
-  not redundant *deletions* of the same record. With SQLite (single
-  instance only) this doesn't apply since there's only ever one sweeper.
+  not redundant *deletions* of the same record. With a single standalone
+  instance this doesn't apply since there's only ever one sweeper.
 
 ## Running Multiple Instances
 
@@ -484,8 +484,10 @@ Running more than one tempcdn instance (e.g. `srv1.tempcdn.eu.cc`,
 `srv2.tempcdn.eu.cc`, `srv3.tempcdn.eu.cc` behind a frontend that rotates
 requests across them) requires every instance to share one metadata store,
 or an upload made through one instance won't be visible — for GET, DELETE,
-or dedup-by-checksum — through another. SQLite is a local, single-process
-file and cannot be safely shared this way.
+or dedup-by-checksum — through another. Every instance already talks to
+Postgres (required for even a single standalone instance — see
+`DATABASE_DSN` above), so multi-instance just means pointing them all at
+the same database.
 
 To run multiple instances:
 
@@ -494,10 +496,6 @@ To run multiple instances:
    allowed to connect to it).
 2. Set `DATABASE_DSN` on every instance to the same
    `postgres://user:password@host:5432/dbname?sslmode=require` value.
-   `NewRepository` (see `internal/metadata/repository.go`) detects the
-   `postgres://`/`postgresql://` scheme and uses `PostgresRepository`
-   instead of `SQLiteRepository` automatically — no other code change is
-   needed.
 3. Set `IP_HASH_SALT` to the same value on every instance, so the same
    uploader IP hashes identically regardless of which instance handled the
    request (otherwise per-uploader dedup-adjacent logic and stats become

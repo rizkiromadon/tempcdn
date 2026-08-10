@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,12 +24,11 @@ var postgresMigrationFiles embed.FS
 // migration process.
 const postgresMigrationLockID = 72186_004
 
-// PostgresRepository is a Repository implementation backed by Postgres,
-// intended for deployments that run more than one tempcdn instance (e.g.
-// srv1/srv2/srv3 behind a rotating/round-robin frontend) against a single
-// shared database, so metadata written by one instance is immediately
-// visible to the others. See SQLiteRepository for the single-instance,
-// embedded-database alternative.
+// PostgresRepository is the sole Repository implementation, backed by
+// Postgres. It supports both a single standalone instance and deployments
+// that run more than one tempcdn instance (e.g. srv1/srv2/srv3 behind a
+// rotating/round-robin frontend) against a single shared database, so
+// metadata written by one instance is immediately visible to the others.
 type PostgresRepository struct {
 	pool *pgxpool.Pool
 }
@@ -441,12 +439,4 @@ func pgScanNodeStatusRow(scanner pgRowScanner) (*NodeStatus, error) {
 	}
 	node.MarkedOfflineAt = markedOfflineAt
 	return &node, nil
-}
-
-// isPostgresDSN reports whether dsn looks like a Postgres connection string
-// (as opposed to the SQLite "file:..." / ":memory:" DSNs used elsewhere in
-// this package), so cmd/server/main.go can pick the right Repository
-// implementation from a single DATABASE_DSN setting.
-func isPostgresDSN(dsn string) bool {
-	return strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://")
 }
