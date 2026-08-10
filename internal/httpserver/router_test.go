@@ -1,10 +1,19 @@
 package httpserver
 
 import (
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+// testLogger returns a discard-output logger for tests that need a
+// non-nil *slog.Logger to construct a Router but don't care about its
+// output.
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // These tests cover the /files/{id} preflight dispatch bug: a preflight
 // (OPTIONS) always answered with the permissive GET CORS policy
@@ -129,5 +138,51 @@ func TestCORSMiddlewareCallsNextForNonOptionsRequest(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
 		t.Errorf("expected Allow-Origin 'https://app.example.com', got %q", got)
+	}
+}
+
+// TestHealthzAllowsHead guards against a real gap: chi does not
+// auto-register HEAD for a route registered with Get (unlike
+// net/http.ServeMux), so uptime/monitoring checks that poll with HEAD -
+// specifically to avoid pulling a response body on every check - would get
+// a 405 unless HEAD is registered explicitly alongside GET.
+func TestHealthzAllowsHead(t *testing.T) {
+	router := NewRouter(RouterDependencies{
+		Logger:        testLogger(),
+		AllowedOrigin: "https://app.example.com",
+	})
+
+	req := httptest.NewRequest(http.MethodHead, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for HEAD /healthz, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %q", got)
+	}
+	// Per the HTTP spec a HEAD response must carry no body, even though
+	// GET /healthz on the same route returns one.
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for HEAD /healthz, got %q", rec.Body.String())
+	}
+}
+
+func TestHealthzGetStillReturnsBody(t *testing.T) {
+	router := NewRouter(RouterDependencies{
+		Logger:        testLogger(),
+		AllowedOrigin: "https://app.example.com",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for GET /healthz, got %d", rec.Code)
+	}
+	if got := rec.Body.String(); got != `{"status":"ok"}` {
+		t.Errorf("expected health check body, got %q", got)
 	}
 }

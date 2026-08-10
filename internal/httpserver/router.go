@@ -37,6 +37,7 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	router.Use(RequestLogging(deps.Logger, deps.RequestLatency))
 
 	getCORS := CORS(deps.AllowedOrigin, "GET, OPTIONS")
+	healthCORS := CORS(deps.AllowedOrigin, "GET, HEAD, OPTIONS")
 	uploadCORS := CORS(deps.AllowedOrigin, "POST, OPTIONS")
 	// GET /files/{id} is intentionally permissive (public metadata, safe to
 	// read from any origin - see README "CORS" section) while DELETE stays
@@ -46,8 +47,13 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	metricsCORS := CORS(deps.AllowedOrigin, "GET, OPTIONS")
 	noop := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 
-	router.With(getCORS).Get("/healthz", handleHealthCheck)
-	router.Options("/healthz", getCORS(noop).ServeHTTP)
+	router.With(healthCORS).Get("/healthz", handleHealthCheck)
+	// HEAD is registered explicitly (chi does not auto-derive it from GET
+	// the way net/http.ServeMux does) so uptime/monitoring checks that use
+	// HEAD - to avoid pulling a response body on every poll - get a real
+	// 200 instead of a 405.
+	router.With(healthCORS).Head("/healthz", handleHealthCheckHead)
+	router.Options("/healthz", healthCORS(noop).ServeHTTP)
 	router.With(metricsCORS, metricsAuth(deps.MetricsToken)).Handle("/metrics", promhttp.Handler())
 	router.Options("/metrics", metricsCORS(noop).ServeHTTP)
 
@@ -89,6 +95,16 @@ func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// handleHealthCheckHead answers HEAD /healthz the same way as GET
+// (same status code and Content-Type), but per the HTTP spec never writes a
+// response body - Go's net/http server already strips any body written by
+// the handler for a HEAD request, but writing one anyway here would be
+// misleading to read and would do needless work on every monitoring poll.
+func handleHealthCheckHead(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 }
 
 // filePreflightCORS dispatches an OPTIONS preflight for /files/{id} to the

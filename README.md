@@ -133,9 +133,14 @@ Returns service liveness status.
 
 ```
 GET /healthz
+HEAD /healthz
 ```
 
-**Response `200 OK`**
+`HEAD` returns the same `200 OK` status and `Content-Type` as `GET`, without
+a response body — useful for uptime/monitoring checks that poll frequently
+and don't need the body.
+
+**Response `200 OK`** (GET)
 
 ```json
 { "status": "ok" }
