@@ -22,3 +22,27 @@ type FileRecord struct {
 func (r *FileRecord) IsExpired(now time.Time) bool {
 	return now.After(r.ExpiresAt)
 }
+
+// NodeStatusOnline and NodeStatusOffline are the only values stored in
+// node_status.status. Online means the node's own heartbeat is recent
+// enough (see Repository.MarkStaleOffline); offline means some other
+// still-live node's janitor tick decided this node's heartbeat had gone
+// stale and flipped it - a node never marks itself offline, since a
+// crashed/powered-off node can't run that code.
+const (
+	NodeStatusOnline  = "online"
+	NodeStatusOffline = "offline"
+)
+
+// NodeStatus is one row of node_status: the liveness record for a single
+// tempcdn instance sharing this database with others (see
+// Repository.Heartbeat, Repository.MarkStaleOffline, and
+// Repository.ListNodeStatus).
+type NodeStatus struct {
+	NodeID          string     `json:"node_id"`
+	Hostname        string     `json:"hostname"`
+	Status          string     `json:"status"`
+	StartedAt       time.Time  `json:"started_at"`
+	LastHeartbeatAt time.Time  `json:"last_heartbeat_at"`
+	MarkedOfflineAt *time.Time `json:"marked_offline_at,omitempty"`
+}

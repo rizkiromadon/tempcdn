@@ -28,6 +28,23 @@ type Config struct {
 	FileTTLHours          int
 	FileSweepIntervalMins int
 
+	// NodeID identifies this process's own row in node_status when running
+	// more than one instance against a shared database (see
+	// nodestatus.ResolveNodeID for the fallback when unset).
+	NodeID string
+	// NodeHeartbeatIntervalSecs is how often this instance upserts its own
+	// node_status row.
+	NodeHeartbeatIntervalSecs int
+	// NodeStaleAfterSecs is how long a node's last_heartbeat_at can go
+	// without an update before another instance's janitor flags it
+	// offline. Must be comfortably larger than
+	// NodeHeartbeatIntervalSecs so a single missed heartbeat (e.g. one
+	// slow DB write) doesn't flip a healthy node offline.
+	NodeStaleAfterSecs int
+	// NodeJanitorIntervalSecs is how often this instance checks every
+	// node's row for staleness.
+	NodeJanitorIntervalSecs int
+
 	RateLimitMaxConcurrentUploads int
 
 	IPHashSalt string
@@ -57,6 +74,7 @@ func Load() (*Config, error) {
 		IPHashSalt:        getEnvOrDefault("IP_HASH_SALT", insecureDefaultIPHashSalt),
 		AllowedOrigin:     os.Getenv("ALLOWED_ORIGIN"),
 		MetricsToken:      os.Getenv("METRICS_TOKEN"),
+		NodeID:            os.Getenv("NODE_ID"),
 
 		CloudflareZoneID:   os.Getenv("CLOUDFLARE_ZONE_ID"),
 		CloudflareAPIToken: os.Getenv("CLOUDFLARE_API_TOKEN"),
@@ -107,6 +125,24 @@ func Load() (*Config, error) {
 	}
 	cfg.RateLimitMaxConcurrentUploads = maxConcurrent
 
+	heartbeatIntervalSecs, err := parseIntOrDefault("NODE_HEARTBEAT_INTERVAL_SECONDS", 15)
+	if err != nil {
+		return nil, err
+	}
+	cfg.NodeHeartbeatIntervalSecs = heartbeatIntervalSecs
+
+	staleAfterSecs, err := parseIntOrDefault("NODE_STALE_AFTER_SECONDS", 45)
+	if err != nil {
+		return nil, err
+	}
+	cfg.NodeStaleAfterSecs = staleAfterSecs
+
+	janitorIntervalSecs, err := parseIntOrDefault("NODE_JANITOR_INTERVAL_SECONDS", 20)
+	if err != nil {
+		return nil, err
+	}
+	cfg.NodeJanitorIntervalSecs = janitorIntervalSecs
+
 	cfg.AllowedMimeTypes = splitAndTrim(getEnvOrDefault("ALLOWED_MIME_TYPES", "image/*,video/*,application/pdf,application/zip,text/plain"))
 	cfg.BlockedExtensions = splitAndTrim(getEnvOrDefault("BLOCKED_EXTENSIONS", ".exe,.bat,.sh,.msi,.dll,.scr"))
 
@@ -141,6 +177,15 @@ func (c *Config) validate() error {
 		if !allowInsecure {
 			return fmt.Errorf("IP_HASH_SALT must be set to a random secret (refusing to start with the well-known default; set ALLOW_INSECURE_IP_HASH_SALT=true to override for local development only)")
 		}
+	}
+	if c.NodeHeartbeatIntervalSecs <= 0 {
+		return fmt.Errorf("NODE_HEARTBEAT_INTERVAL_SECONDS must be positive")
+	}
+	if c.NodeStaleAfterSecs <= c.NodeHeartbeatIntervalSecs {
+		return fmt.Errorf("NODE_STALE_AFTER_SECONDS (%d) must be greater than NODE_HEARTBEAT_INTERVAL_SECONDS (%d), or a healthy node with one slow heartbeat would be flagged offline", c.NodeStaleAfterSecs, c.NodeHeartbeatIntervalSecs)
+	}
+	if c.NodeJanitorIntervalSecs <= 0 {
+		return fmt.Errorf("NODE_JANITOR_INTERVAL_SECONDS must be positive")
 	}
 	if c.CloudflareCacheEnabled {
 		if c.CloudflareZoneID == "" {

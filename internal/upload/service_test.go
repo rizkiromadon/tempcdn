@@ -82,6 +82,19 @@ func (m *mockRepository) DeleteByID(ctx context.Context, id string) error {
 	return nil
 }
 
+func (m *mockRepository) Stats(ctx context.Context, now time.Time) (*metadata.Stats, error) {
+	return &metadata.Stats{ContentTypeBreakdown: map[string]int64{}}, nil
+}
+
+func (m *mockRepository) Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error {
+	return nil
+}
+func (m *mockRepository) MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error) {
+	return nil, nil
+}
+func (m *mockRepository) ListNodeStatus(ctx context.Context) ([]*metadata.NodeStatus, error) {
+	return nil, nil
+}
 func (m *mockRepository) Close() error { return nil }
 
 func TestUploadServiceFirstUploadStoresObjectAndMetadata(t *testing.T) {

@@ -122,6 +122,10 @@ for a ready-to-copy template.
 | `METRICS_TOKEN` | — | If set, required (as `X-Metrics-Token` header or `Authorization: Bearer`) to read `/metrics`. CORS alone does not stop direct/server-to-server access, so this is the actual access control; leave unset only if `/metrics` is not publicly reachable. |
 | `ALLOWED_MIME_TYPES` | `image/*,video/*,application/pdf,application/zip,text/plain` | Comma-separated list of allowed MIME types/patterns. Supports `type/*` wildcards. |
 | `BLOCKED_EXTENSIONS` | `.exe,.bat,.sh,.msi,.dll,.scr` | Comma-separated list of blocked file extensions. Matched both as the file's final extension and as a substring earlier in the filename (e.g. `evil.exe.png` is also blocked). |
+| `NODE_ID` | random `hostname-xxxx` | This instance's identifier in the node liveness table (`GET /api/v1/nodes`). Set explicitly (e.g. `srv1`, `srv2`) when running multiple instances, for stable/readable rows across restarts. |
+| `NODE_HEARTBEAT_INTERVAL_SECONDS` | `15` | How often this instance updates its own liveness row. |
+| `NODE_STALE_AFTER_SECONDS` | `45` | How long a node's heartbeat can go stale before another instance flags it offline. Must be greater than `NODE_HEARTBEAT_INTERVAL_SECONDS`. |
+| `NODE_JANITOR_INTERVAL_SECONDS` | `20` | How often this instance checks all nodes for staleness. |
 
 ## API Reference
 

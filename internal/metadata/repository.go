@@ -35,6 +35,25 @@ type Repository interface {
 	// monotonically-increasing counter recorded at upload time (see
 	// httpserver.Metrics), not with this table.
 	Stats(ctx context.Context, now time.Time) (*Stats, error)
+
+	// Heartbeat upserts the calling node's own row: creates it on first
+	// call (recording startedAt) or, on every later call, refreshes
+	// last_heartbeat_at and forces status back to "online" - a node that
+	// was flagged offline by another instance's janitor and then comes
+	// back reclaims "online" the moment it heartbeats again.
+	Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error
+	// MarkStaleOffline flips every row still marked "online" whose
+	// last_heartbeat_at is at or before "before" to "offline", stamping
+	// marked_offline_at, and returns the affected node IDs. Safe to call
+	// concurrently from more than one instance's janitor tick: the WHERE
+	// status = 'online' guard means a row already flipped by another
+	// instance's tick is simply not matched again, not double-counted or
+	// errored on.
+	MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error)
+	// ListNodeStatus returns every known node's row, most recently
+	// heartbeated first, for the GET /api/v1/nodes endpoint.
+	ListNodeStatus(ctx context.Context) ([]*NodeStatus, error)
+
 	Close() error
 }
 
@@ -312,6 +331,79 @@ func (r *SQLiteRepository) DeleteByID(ctx context.Context, id string) error {
 	return nil
 }
 
+// Heartbeat upserts this node's own row. INSERT ... ON CONFLICT is used
+// instead of a separate SELECT-then-INSERT/UPDATE, so a node's very first
+// heartbeat after startup and every heartbeat after that go through the
+// same statement without a race between the existence check and the write
+// (SQLite's connection pool is capped at 1 anyway - see
+// NewSQLiteRepository - but this keeps the two backends' behavior aligned).
+func (r *SQLiteRepository) Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO node_status (node_id, hostname, status, started_at, last_heartbeat_at, marked_offline_at)
+		VALUES (?, ?, 'online', ?, ?, NULL)
+		ON CONFLICT(node_id) DO UPDATE SET
+			hostname = excluded.hostname,
+			status = 'online',
+			last_heartbeat_at = excluded.last_heartbeat_at,
+			marked_offline_at = NULL
+	`, nodeID, hostname, startedAt, now)
+	if err != nil {
+		return fmt.Errorf("upsert node heartbeat: %w", err)
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		UPDATE node_status
+		SET status = 'offline', marked_offline_at = ?
+		WHERE status = 'online' AND last_heartbeat_at <= ?
+		RETURNING node_id
+	`, now, before)
+	if err != nil {
+		return nil, fmt.Errorf("mark stale nodes offline: %w", err)
+	}
+	defer rows.Close()
+
+	var nodeIDs []string
+	for rows.Next() {
+		var nodeID string
+		if err := rows.Scan(&nodeID); err != nil {
+			return nil, fmt.Errorf("scan marked-offline node id: %w", err)
+		}
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate marked-offline node ids: %w", err)
+	}
+	return nodeIDs, nil
+}
+
+func (r *SQLiteRepository) ListNodeStatus(ctx context.Context) ([]*NodeStatus, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT node_id, hostname, status, started_at, last_heartbeat_at, marked_offline_at
+		FROM node_status
+		ORDER BY last_heartbeat_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query node status: %w", err)
+	}
+	defer rows.Close()
+
+	var nodes []*NodeStatus
+	for rows.Next() {
+		node, err := scanNodeStatusRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan node status row: %w", err)
+		}
+		nodes = append(nodes, node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate node status rows: %w", err)
+	}
+	return nodes, nil
+}
+
 func (r *SQLiteRepository) Close() error {
 	return r.db.Close()
 }
@@ -359,4 +451,24 @@ func scanFileRecordRows(rows *sql.Rows) (*FileRecord, error) {
 		return nil, fmt.Errorf("scan file record row: %w", err)
 	}
 	return record, nil
+}
+
+func scanNodeStatusRow(scanner rowScanner) (*NodeStatus, error) {
+	var node NodeStatus
+	var markedOfflineAt sql.NullTime
+	err := scanner.Scan(
+		&node.NodeID,
+		&node.Hostname,
+		&node.Status,
+		&node.StartedAt,
+		&node.LastHeartbeatAt,
+		&markedOfflineAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if markedOfflineAt.Valid {
+		node.MarkedOfflineAt = &markedOfflineAt.Time
+	}
+	return &node, nil
 }

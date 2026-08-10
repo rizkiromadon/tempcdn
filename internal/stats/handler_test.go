@@ -39,6 +39,15 @@ func (f *fakeRepository) FindExpired(ctx context.Context, before time.Time, limi
 func (f *fakeRepository) Stats(ctx context.Context, now time.Time) (*metadata.Stats, error) {
 	return f.stats, f.statsErr
 }
+func (f *fakeRepository) Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error) {
+	panic("not implemented")
+}
+func (f *fakeRepository) ListNodeStatus(ctx context.Context) ([]*metadata.NodeStatus, error) {
+	panic("not implemented")
+}
 func (f *fakeRepository) Close() error { panic("not implemented") }
 
 func newTestCounters() (uploads, bytesTotal, errorsTotal prometheus.Counter) {

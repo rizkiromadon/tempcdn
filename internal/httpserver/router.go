@@ -10,18 +10,20 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tempcdn/tempcdn/internal/file"
+	"github.com/tempcdn/tempcdn/internal/nodestatus"
 	"github.com/tempcdn/tempcdn/internal/response"
 	"github.com/tempcdn/tempcdn/internal/stats"
 	"github.com/tempcdn/tempcdn/internal/upload"
 )
 
 type RouterDependencies struct {
-	Logger        *slog.Logger
-	UploadHandler *upload.Handler
-	FileHandler   *file.Handler
-	ConfigHandler *upload.ConfigHandler
-	StatsHandler  *stats.Handler
-	AllowedOrigin string
+	Logger            *slog.Logger
+	UploadHandler     *upload.Handler
+	FileHandler       *file.Handler
+	ConfigHandler     *upload.ConfigHandler
+	StatsHandler      *stats.Handler
+	NodeStatusHandler *nodestatus.Handler
+	AllowedOrigin     string
 	// MetricsToken, if non-empty, is required as a Bearer token (or
 	// X-Metrics-Token header) on /metrics requests. CORS alone is a
 	// browser-enforced policy and does nothing to stop direct
@@ -86,6 +88,14 @@ func NewRouter(deps RouterDependencies) http.Handler {
 		// policy.
 		apiRouter.With(getCORS).Get("/stats", deps.StatsHandler.ServeHTTP)
 		apiRouter.Options("/stats", getCORS(noop).ServeHTTP)
+
+		// /nodes is public read-only liveness info (node IDs, hostnames,
+		// online/offline, heartbeat timestamps) - operational visibility,
+		// not sensitive per-file data - so it gets the same open
+		// ALLOWED_ORIGIN policy as /config and /stats rather than the
+		// token-gated /metrics policy.
+		apiRouter.With(getCORS).Get("/nodes", deps.NodeStatusHandler.ServeHTTP)
+		apiRouter.Options("/nodes", getCORS(noop).ServeHTTP)
 	})
 
 	return router

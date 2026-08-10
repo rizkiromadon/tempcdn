@@ -14,6 +14,7 @@ import (
 	"github.com/tempcdn/tempcdn/internal/httpserver"
 	"github.com/tempcdn/tempcdn/internal/logger"
 	"github.com/tempcdn/tempcdn/internal/metadata"
+	"github.com/tempcdn/tempcdn/internal/nodestatus"
 	"github.com/tempcdn/tempcdn/internal/ratelimit"
 	"github.com/tempcdn/tempcdn/internal/stats"
 	"github.com/tempcdn/tempcdn/internal/storage"
@@ -115,15 +116,53 @@ func main() {
 		metrics.UploadErrorsTotal,
 	)
 
+	// Node liveness: lets every instance sharing DATABASE_DSN (e.g.
+	// srv1/srv2/srv3 behind a rotating frontend) push its own heartbeat and
+	// have any still-live instance flag a node offline once its heartbeat
+	// goes stale. Meaningful primarily under PostgresRepository - a single
+	// SQLiteRepository instance still reports its own row, it just never
+	// sees any peers.
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Error("failed to read hostname", "error", err)
+		os.Exit(1)
+	}
+	nodeID, err := nodestatus.ResolveNodeID(cfg.NodeID, hostname)
+	if err != nil {
+		log.Error("failed to resolve node id", "error", err)
+		os.Exit(1)
+	}
+	log.Info("nodestatus_starting", "node_id", nodeID, "hostname", hostname)
+
+	nodeReporter := nodestatus.NewReporter(
+		repository,
+		nodeID,
+		hostname,
+		time.Duration(cfg.NodeHeartbeatIntervalSecs)*time.Second,
+		log,
+	)
+	go nodeReporter.Run(rootCtx)
+
+	nodeJanitor := nodestatus.NewJanitor(
+		repository,
+		time.Duration(cfg.NodeJanitorIntervalSecs)*time.Second,
+		time.Duration(cfg.NodeStaleAfterSecs)*time.Second,
+		log,
+	)
+	go nodeJanitor.Run(rootCtx)
+
+	nodeStatusHandler := nodestatus.NewHandler(repository)
+
 	router := httpserver.NewRouter(httpserver.RouterDependencies{
-		Logger:         log,
-		UploadHandler:  uploadHandler,
-		FileHandler:    fileHandler,
-		ConfigHandler:  configHandler,
-		StatsHandler:   statsHandler,
-		AllowedOrigin:  cfg.AllowedOrigin,
-		MetricsToken:   cfg.MetricsToken,
-		RequestLatency: metrics.RequestLatency,
+		Logger:            log,
+		UploadHandler:     uploadHandler,
+		FileHandler:       fileHandler,
+		ConfigHandler:     configHandler,
+		StatsHandler:      statsHandler,
+		NodeStatusHandler: nodeStatusHandler,
+		AllowedOrigin:     cfg.AllowedOrigin,
+		MetricsToken:      cfg.MetricsToken,
+		RequestLatency:    metrics.RequestLatency,
 	})
 
 	// Expiry sweeper: this is the primary, application-level enforcement of
