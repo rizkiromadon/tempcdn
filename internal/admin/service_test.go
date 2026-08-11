@@ -191,3 +191,140 @@ func TestLogoutIsIdempotent(t *testing.T) {
 		t.Errorf("expected logout of empty token to succeed, got: %v", err)
 	}
 }
+
+func seedTestUploadSettings(t *testing.T, repo *fakeRepository) {
+	t.Helper()
+	if err := repo.SeedUploadSettingsIfMissing(context.Background(), &metadata.UploadSettings{
+		MaxUploadSizeMB:   100,
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: []string{".exe"},
+		UpdatedAt:         time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("failed to seed upload settings: %v", err)
+	}
+}
+
+func TestGetUploadSettingsReturnsSeededValues(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	svc := NewService(repo)
+
+	settings, err := svc.GetUploadSettings(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if settings.MaxUploadSizeMB != 100 {
+		t.Errorf("expected max_upload_size_mb=100, got %d", settings.MaxUploadSizeMB)
+	}
+}
+
+func TestUpdateUploadSettingsPersistsAndStampsUpdatedBy(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	svc := NewService(repo)
+	admin := newTestAdmin(t, repo, "alice", "correct-horse-battery-staple")
+
+	updated, err := svc.UpdateUploadSettings(context.Background(), admin.ID, UpdateUploadSettingsInput{
+		MaxUploadSizeMB:   250,
+		AllowedMimeTypes:  []string{"image/*", "application/pdf"},
+		BlockedExtensions: []string{".exe", ".bat"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if updated.MaxUploadSizeMB != 250 {
+		t.Errorf("expected max_upload_size_mb=250, got %d", updated.MaxUploadSizeMB)
+	}
+	if updated.UpdatedBy == nil || *updated.UpdatedBy != admin.ID {
+		t.Errorf("expected updated_by=%s, got %v", admin.ID, updated.UpdatedBy)
+	}
+
+	got, err := svc.GetUploadSettings(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error re-reading settings, got %v", err)
+	}
+	if got.MaxUploadSizeMB != 250 {
+		t.Errorf("expected persisted max_upload_size_mb=250, got %d", got.MaxUploadSizeMB)
+	}
+}
+
+func TestUpdateUploadSettingsRejectsNonPositiveSize(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	svc := NewService(repo)
+
+	_, err := svc.UpdateUploadSettings(context.Background(), "admin-id", UpdateUploadSettingsInput{
+		MaxUploadSizeMB:   0,
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: nil,
+	})
+	if !errors.Is(err, ErrInvalidUploadSettings) {
+		t.Errorf("expected ErrInvalidUploadSettings for zero max size, got %v", err)
+	}
+}
+
+func TestUpdateUploadSettingsRejectsSizeAboveCeiling(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	svc := NewService(repo)
+
+	_, err := svc.UpdateUploadSettings(context.Background(), "admin-id", UpdateUploadSettingsInput{
+		MaxUploadSizeMB:   maxUploadSizeMBCeiling + 1,
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: nil,
+	})
+	if !errors.Is(err, ErrInvalidUploadSettings) {
+		t.Errorf("expected ErrInvalidUploadSettings for size above ceiling, got %v", err)
+	}
+}
+
+func TestUpdateUploadSettingsRejectsEmptyMimeAllowlist(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	svc := NewService(repo)
+
+	_, err := svc.UpdateUploadSettings(context.Background(), "admin-id", UpdateUploadSettingsInput{
+		MaxUploadSizeMB:   100,
+		AllowedMimeTypes:  []string{"   "},
+		BlockedExtensions: nil,
+	})
+	if !errors.Is(err, ErrInvalidUploadSettings) {
+		t.Errorf("expected ErrInvalidUploadSettings for empty (whitespace-only) mime allowlist, got %v", err)
+	}
+}
+
+func TestUpdateUploadSettingsRejectsExtensionWithoutDot(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	svc := NewService(repo)
+
+	_, err := svc.UpdateUploadSettings(context.Background(), "admin-id", UpdateUploadSettingsInput{
+		MaxUploadSizeMB:   100,
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: []string{"exe"},
+	})
+	if !errors.Is(err, ErrInvalidUploadSettings) {
+		t.Errorf("expected ErrInvalidUploadSettings for extension missing a leading dot, got %v", err)
+	}
+}
+
+func TestUpdateUploadSettingsTrimsAndDropsEmptyEntries(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	svc := NewService(repo)
+
+	updated, err := svc.UpdateUploadSettings(context.Background(), "admin-id", UpdateUploadSettingsInput{
+		MaxUploadSizeMB:   100,
+		AllowedMimeTypes:  []string{" image/* ", "", "application/pdf"},
+		BlockedExtensions: []string{" .exe ", ""},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(updated.AllowedMimeTypes) != 2 || updated.AllowedMimeTypes[0] != "image/*" || updated.AllowedMimeTypes[1] != "application/pdf" {
+		t.Errorf("expected trimmed, non-empty mime types [image/* application/pdf], got %v", updated.AllowedMimeTypes)
+	}
+	if len(updated.BlockedExtensions) != 1 || updated.BlockedExtensions[0] != ".exe" {
+		t.Errorf("expected trimmed, non-empty blocked extensions [.exe], got %v", updated.BlockedExtensions)
+	}
+}

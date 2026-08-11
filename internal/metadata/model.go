@@ -96,3 +96,22 @@ type APIKey struct {
 func (k *APIKey) IsRevoked() bool {
 	return k.RevokedAt != nil
 }
+
+// UploadSettings is the single row of upload_settings: the runtime-
+// configurable upload limits enforced by internal/upload.Validator and
+// reported by GET /api/v1/config. Unlike FileRecord/Admin/etc., there is
+// exactly one of these per deployment - see the CHECK (id = 1) constraint
+// in postgres_migrations/0005_upload_settings.sql. Changeable at runtime
+// via the admin API (internal/admin.Service Get/UpdateUploadSettings)
+// instead of only at process boot from environment variables.
+type UploadSettings struct {
+	MaxUploadSizeMB   int64     `json:"max_upload_size_mb"`
+	AllowedMimeTypes  []string  `json:"allowed_mime_types"`
+	BlockedExtensions []string  `json:"blocked_extensions"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	// UpdatedBy is the admin ID who last changed these settings via the
+	// admin API, or nil if the row still holds its initial boot-time seed
+	// (see internal/admin.SeedUploadSettingsIfMissing) and has never been
+	// changed since.
+	UpdatedBy *string `json:"updated_by,omitempty"`
+}

@@ -17,6 +17,13 @@ var (
 
 var ErrAPIKeyNotFound = errors.New("api key not found")
 
+// ErrUploadSettingsNotFound is returned by GetUploadSettings before the
+// single settings row has ever been seeded. In practice this should not
+// happen post-boot, since main.go seeds it (see internal/admin.
+// SeedUploadSettingsIfMissing) before the HTTP server starts accepting
+// traffic.
+var ErrUploadSettingsNotFound = errors.New("upload settings not found")
+
 // errInvalidDSN is returned by NewRepository when DATABASE_DSN is not a
 // Postgres connection string. tempcdn requires Postgres for every
 // deployment (see NewRepository).
@@ -110,6 +117,24 @@ type Repository interface {
 	// hard-deleted, so the admin dashboard retains a full history of keys
 	// that ever existed.
 	RevokeAPIKey(ctx context.Context, id string, now time.Time) error
+
+	// GetUploadSettings returns the single upload_settings row. Returns
+	// ErrUploadSettingsNotFound if it has never been seeded (see
+	// SeedUploadSettingsIfMissing).
+	GetUploadSettings(ctx context.Context) (*UploadSettings, error)
+	// SeedUploadSettingsIfMissing inserts the given settings as the initial
+	// row only if none exists yet (ON CONFLICT DO NOTHING on the fixed
+	// id = 1 row) - called once at startup with the environment-variable
+	// defaults, so a fresh database starts out behaving exactly like the
+	// old hardcoded-at-boot config, while an existing database (a restart,
+	// not a first boot) keeps whatever an admin has since configured via
+	// UpdateUploadSettings rather than reverting to the env var defaults.
+	SeedUploadSettingsIfMissing(ctx context.Context, settings *UploadSettings) error
+	// UpdateUploadSettings overwrites the single settings row (which must
+	// already exist - see SeedUploadSettingsIfMissing) and stamps
+	// updated_at/updated_by. Returns ErrUploadSettingsNotFound if the row
+	// somehow doesn't exist yet.
+	UpdateUploadSettings(ctx context.Context, settings *UploadSettings, updatedBy string, now time.Time) error
 
 	Close() error
 }

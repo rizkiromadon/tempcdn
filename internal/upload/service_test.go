@@ -119,6 +119,28 @@ func (m *mockRepository) DeleteAdminSession(ctx context.Context, tokenHash strin
 func (m *mockRepository) DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error {
 	return nil
 }
+func (m *mockRepository) InsertAPIKey(ctx context.Context, key *metadata.APIKey) error { return nil }
+func (m *mockRepository) FindAPIKeyByTokenHash(ctx context.Context, tokenHash string) (*metadata.APIKey, error) {
+	return nil, metadata.ErrAPIKeyNotFound
+}
+func (m *mockRepository) ListAPIKeys(ctx context.Context) ([]*metadata.APIKey, error) {
+	return nil, nil
+}
+func (m *mockRepository) TouchAPIKey(ctx context.Context, id string, now time.Time) error {
+	return nil
+}
+func (m *mockRepository) RevokeAPIKey(ctx context.Context, id string, now time.Time) error {
+	return nil
+}
+func (m *mockRepository) GetUploadSettings(ctx context.Context) (*metadata.UploadSettings, error) {
+	return nil, metadata.ErrUploadSettingsNotFound
+}
+func (m *mockRepository) SeedUploadSettingsIfMissing(ctx context.Context, settings *metadata.UploadSettings) error {
+	return nil
+}
+func (m *mockRepository) UpdateUploadSettings(ctx context.Context, settings *metadata.UploadSettings, updatedBy string, now time.Time) error {
+	return metadata.ErrUploadSettingsNotFound
+}
 func (m *mockRepository) Close() error { return nil }
 
 func TestUploadServiceFirstUploadStoresObjectAndMetadata(t *testing.T) {

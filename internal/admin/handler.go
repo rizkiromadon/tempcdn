@@ -15,10 +15,27 @@ import (
 type Handler struct {
 	service *Service
 	logger  *slog.Logger
+	// onUploadSettingsUpdated, if set, is invoked synchronously right after
+	// a successful UpdateUploadSettings, with the newly persisted settings.
+	// Wired up in cmd/server/main.go to push the new values into the
+	// in-process upload.Validator (via Validator.Update) so the change
+	// takes effect on this instance immediately, without waiting for a
+	// restart or a poll. Left nil in tests that don't care about this
+	// side effect.
+	onUploadSettingsUpdated func(*metadata.UploadSettings)
 }
 
 func NewHandler(service *Service, logger *slog.Logger) *Handler {
 	return &Handler{service: service, logger: logger}
+}
+
+// SetUploadSettingsUpdatedCallback registers the hook invoked after every
+// successful UpdateUploadSettings call (see Handler.onUploadSettingsUpdated).
+// Not a constructor parameter because it typically closes over a
+// *upload.Validator constructed later in main.go's wiring order, after the
+// admin.Handler already exists.
+func (h *Handler) SetUploadSettingsUpdatedCallback(fn func(*metadata.UploadSettings)) {
+	h.onUploadSettingsUpdated = fn
 }
 
 type loginRequestBody struct {
@@ -192,6 +209,87 @@ func toAPIKeyResponseBody(key *metadata.APIKey) apiKeyResponseBody {
 		body.RevokedAt = &formatted
 	}
 	return body
+}
+
+type uploadSettingsResponseBody struct {
+	MaxUploadSizeMB   int64    `json:"max_upload_size_mb"`
+	AllowedMimeTypes  []string `json:"allowed_mime_types"`
+	BlockedExtensions []string `json:"blocked_extensions"`
+	UpdatedAt         string   `json:"updated_at"`
+	UpdatedBy         *string  `json:"updated_by,omitempty"`
+}
+
+func toUploadSettingsResponseBody(settings *metadata.UploadSettings) uploadSettingsResponseBody {
+	return uploadSettingsResponseBody{
+		MaxUploadSizeMB:   settings.MaxUploadSizeMB,
+		AllowedMimeTypes:  settings.AllowedMimeTypes,
+		BlockedExtensions: settings.BlockedExtensions,
+		UpdatedAt:         settings.UpdatedAt.Format(apiTimeFormat),
+		UpdatedBy:         settings.UpdatedBy,
+	}
+}
+
+// GetUploadSettings handles GET /api/v1/admin/upload-settings: returns the
+// current runtime-configurable upload limits (max size, allowed MIME
+// types, blocked extensions) for the admin dashboard's settings view.
+// Always behind RequireAdminSession.
+func (h *Handler) GetUploadSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.service.GetUploadSettings(r.Context())
+	if err != nil {
+		h.logger.Error("admin_get_upload_settings_failed", "error", err)
+		response.Error(w, http.StatusInternalServerError, "failed to get upload settings")
+		return
+	}
+	response.JSON(w, http.StatusOK, toUploadSettingsResponseBody(settings))
+}
+
+type updateUploadSettingsRequestBody struct {
+	MaxUploadSizeMB   int64    `json:"max_upload_size_mb"`
+	AllowedMimeTypes  []string `json:"allowed_mime_types"`
+	BlockedExtensions []string `json:"blocked_extensions"`
+}
+
+// UpdateUploadSettings handles PUT /api/v1/admin/upload-settings: persists
+// new upload limits and, if a callback has been registered via
+// SetUploadSettingsUpdatedCallback, invokes it with the new settings so
+// this instance's in-process upload.Validator picks up the change
+// immediately (see cmd/server/main.go's wiring). Always behind
+// RequireAdminSession.
+func (h *Handler) UpdateUploadSettings(w http.ResponseWriter, r *http.Request) {
+	var body updateUploadSettingsRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	session, ok := SessionFromContext(r.Context())
+	if !ok {
+		// Unreachable behind RequireAdminSession - guarded defensively,
+		// same reasoning as Handler.Me.
+		response.Error(w, http.StatusInternalServerError, "missing session context")
+		return
+	}
+
+	settings, err := h.service.UpdateUploadSettings(r.Context(), session.Admin.ID, UpdateUploadSettingsInput{
+		MaxUploadSizeMB:   body.MaxUploadSizeMB,
+		AllowedMimeTypes:  body.AllowedMimeTypes,
+		BlockedExtensions: body.BlockedExtensions,
+	})
+	if errors.Is(err, ErrInvalidUploadSettings) {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		h.logger.Error("admin_update_upload_settings_failed", "error", err)
+		response.Error(w, http.StatusInternalServerError, "failed to update upload settings")
+		return
+	}
+
+	if h.onUploadSettingsUpdated != nil {
+		h.onUploadSettingsUpdated(settings)
+	}
+
+	response.JSON(w, http.StatusOK, toUploadSettingsResponseBody(settings))
 }
 
 // extractBearerToken reads the session token from the Authorization

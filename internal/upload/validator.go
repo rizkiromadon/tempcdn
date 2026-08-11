@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
 
 // ValidationError marks an error as safe to show verbatim to the client and
@@ -21,34 +22,73 @@ func newValidationError(format string, args ...interface{}) error {
 	return &ValidationError{msg: fmt.Sprintf(format, args...)}
 }
 
-type Validator struct {
+// validatorRules is the mutable part of Validator's configuration: the
+// three limits an admin can change at runtime via PUT
+// /api/v1/admin/upload-settings (see internal/admin.Service.
+// UpdateUploadSettings). Held behind an atomic.Pointer so a request
+// in-flight through Validator's methods always sees one fully-consistent
+// set of rules - either entirely the old values or entirely the new ones,
+// never a mix of, say, the new max size with the old MIME allowlist.
+type validatorRules struct {
 	maxSizeBytes      int64
 	allowedMimeTypes  []string
 	blockedExtensions []string
 }
 
+type Validator struct {
+	rules atomic.Pointer[validatorRules]
+}
+
 func NewValidator(maxSizeBytes int64, allowedMimeTypes []string, blockedExtensions []string) *Validator {
-	return &Validator{
+	v := &Validator{}
+	v.Update(maxSizeBytes, allowedMimeTypes, blockedExtensions)
+	return v
+}
+
+// Update atomically swaps in a new set of validation rules. Safe to call
+// concurrently with any of the Validate*/DetectAndValidateContentType
+// methods from in-flight uploads - see validatorRules. Called whenever an
+// admin changes upload settings (internal/admin.Service.
+// UpdateUploadSettings), so new limits take effect immediately for the
+// next upload, without a restart.
+func (v *Validator) Update(maxSizeBytes int64, allowedMimeTypes []string, blockedExtensions []string) {
+	// Copy the slices rather than storing the caller's backing arrays
+	// directly, so a caller mutating its own slice afterward (or reusing
+	// it across calls) can never retroactively change rules already
+	// swapped in here.
+	allowedCopy := append([]string(nil), allowedMimeTypes...)
+	blockedCopy := append([]string(nil), blockedExtensions...)
+	v.rules.Store(&validatorRules{
 		maxSizeBytes:      maxSizeBytes,
-		allowedMimeTypes:  allowedMimeTypes,
-		blockedExtensions: blockedExtensions,
-	}
+		allowedMimeTypes:  allowedCopy,
+		blockedExtensions: blockedCopy,
+	})
+}
+
+// Snapshot returns the currently active rules as plain values, for
+// callers (e.g. upload.ConfigHandler, upload.Handler) that need to read
+// the current limits without duplicating the atomic-pointer plumbing.
+func (v *Validator) Snapshot() (maxSizeBytes int64, allowedMimeTypes []string, blockedExtensions []string) {
+	r := v.rules.Load()
+	return r.maxSizeBytes, r.allowedMimeTypes, r.blockedExtensions
 }
 
 func (v *Validator) ValidateSize(sizeBytes int64) error {
+	r := v.rules.Load()
 	if sizeBytes <= 0 {
 		return newValidationError("file is empty")
 	}
-	if sizeBytes > v.maxSizeBytes {
-		return newValidationError("file exceeds maximum allowed size of %d bytes", v.maxSizeBytes)
+	if sizeBytes > r.maxSizeBytes {
+		return newValidationError("file exceeds maximum allowed size of %d bytes", r.maxSizeBytes)
 	}
 	return nil
 }
 
 func (v *Validator) ValidateExtension(originalName string) error {
+	r := v.rules.Load()
 	lowerName := strings.ToLower(originalName)
 	extension := strings.ToLower(filepath.Ext(originalName))
-	for _, blocked := range v.blockedExtensions {
+	for _, blocked := range r.blockedExtensions {
 		blockedLower := strings.ToLower(blocked)
 		if blockedLower == extension {
 			return newValidationError("file extension %s is not allowed", extension)
@@ -77,7 +117,8 @@ func (v *Validator) DetectAndValidateContentType(sniffBuffer []byte) (string, er
 }
 
 func (v *Validator) isMimeTypeAllowed(mimeType string) bool {
-	for _, pattern := range v.allowedMimeTypes {
+	r := v.rules.Load()
+	for _, pattern := range r.allowedMimeTypes {
 		if matchesMimePattern(pattern, mimeType) {
 			return true
 		}

@@ -80,3 +80,28 @@ func Bootstrap(ctx context.Context, repository metadata.Repository, cfg Bootstra
 
 	return nil
 }
+
+// UploadSettingsDefaults carries the environment-variable defaults (from
+// config.Config) used to seed upload_settings on first boot - the same
+// values that, before this feature, were the only source of truth for
+// upload limits.
+type UploadSettingsDefaults struct {
+	MaxUploadSizeMB   int64
+	AllowedMimeTypes  []string
+	BlockedExtensions []string
+}
+
+// SeedUploadSettings ensures the single upload_settings row exists,
+// inserting UploadSettingsDefaults if it doesn't. Like Bootstrap, this is a
+// no-op on every boot after the first: once the row exists (whether still
+// at its seeded defaults or since changed by an admin via
+// Service.UpdateUploadSettings), later boots leave it untouched rather
+// than reverting it back to the environment variable defaults.
+func SeedUploadSettings(ctx context.Context, repository metadata.Repository, defaults UploadSettingsDefaults) error {
+	return repository.SeedUploadSettingsIfMissing(ctx, &metadata.UploadSettings{
+		MaxUploadSizeMB:   defaults.MaxUploadSizeMB,
+		AllowedMimeTypes:  defaults.AllowedMimeTypes,
+		BlockedExtensions: defaults.BlockedExtensions,
+		UpdatedAt:         time.Now().UTC(),
+	})
+}

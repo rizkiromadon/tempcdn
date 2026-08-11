@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -180,5 +181,79 @@ func TestPostgresFindExpiredSkipsRowsLockedByAnotherSweeper(t *testing.T) {
 		if count > 1 {
 			t.Errorf("record %s was returned by more than one concurrent FindExpired call (count=%d) - SKIP LOCKED did not prevent overlap", id, count)
 		}
+	}
+}
+
+// TestPostgresSeedUploadSettingsIfMissingIsIdempotent guards the same
+// restart scenario as TestPostgresMigrateIsIdempotent, but for the
+// upload_settings row: a later boot with different env-var-derived
+// defaults must not silently overwrite settings an admin has since
+// changed via UpdateUploadSettings.
+func TestPostgresSeedUploadSettingsIfMissingIsIdempotent(t *testing.T) {
+	repo := newTestPostgresRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.pool.Exec(ctx, `DELETE FROM upload_settings`); err != nil {
+		t.Fatalf("failed to clear upload_settings table: %v", err)
+	}
+
+	first := &UploadSettings{
+		MaxUploadSizeMB:   100,
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: []string{".exe"},
+		UpdatedAt:         time.Now().UTC(),
+	}
+	if err := repo.SeedUploadSettingsIfMissing(ctx, first); err != nil {
+		t.Fatalf("first seed failed: %v", err)
+	}
+
+	// Simulate an admin changing settings after the initial seed.
+	changedNow := time.Now().UTC()
+	changed := &UploadSettings{
+		MaxUploadSizeMB:   250,
+		AllowedMimeTypes:  []string{"image/*", "application/pdf"},
+		BlockedExtensions: []string{".exe", ".bat"},
+	}
+	if err := repo.UpdateUploadSettings(ctx, changed, "test-admin-id", changedNow); err != nil {
+		t.Fatalf("update after seed failed: %v", err)
+	}
+
+	// A later "boot" seeding with the original defaults again must be a
+	// no-op, since the row now exists (see the ON CONFLICT DO NOTHING in
+	// SeedUploadSettingsIfMissing).
+	if err := repo.SeedUploadSettingsIfMissing(ctx, first); err != nil {
+		t.Fatalf("second seed (simulating a restart) failed: %v", err)
+	}
+
+	got, err := repo.GetUploadSettings(ctx)
+	if err != nil {
+		t.Fatalf("get upload settings failed: %v", err)
+	}
+	if got.MaxUploadSizeMB != 250 {
+		t.Errorf("expected admin-changed max_upload_size_mb=250 to survive re-seed, got %d", got.MaxUploadSizeMB)
+	}
+	if got.UpdatedBy == nil || *got.UpdatedBy != "test-admin-id" {
+		t.Errorf("expected updated_by to still reflect the admin change, got %v", got.UpdatedBy)
+	}
+}
+
+// TestPostgresUpdateUploadSettingsFailsWhenRowMissing guards
+// UpdateUploadSettings' documented ErrUploadSettingsNotFound behavior: it
+// must not silently insert a row, only update an existing one.
+func TestPostgresUpdateUploadSettingsFailsWhenRowMissing(t *testing.T) {
+	repo := newTestPostgresRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.pool.Exec(ctx, `DELETE FROM upload_settings`); err != nil {
+		t.Fatalf("failed to clear upload_settings table: %v", err)
+	}
+
+	err := repo.UpdateUploadSettings(ctx, &UploadSettings{
+		MaxUploadSizeMB:   50,
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: nil,
+	}, "test-admin-id", time.Now().UTC())
+	if !errors.Is(err, ErrUploadSettingsNotFound) {
+		t.Fatalf("expected ErrUploadSettingsNotFound, got %v", err)
 	}
 }

@@ -78,6 +78,30 @@ func (f *fakeRepository) DeleteAdminSession(ctx context.Context, tokenHash strin
 func (f *fakeRepository) DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error {
 	panic("not implemented")
 }
+func (f *fakeRepository) InsertAPIKey(ctx context.Context, key *metadata.APIKey) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) FindAPIKeyByTokenHash(ctx context.Context, tokenHash string) (*metadata.APIKey, error) {
+	panic("not implemented")
+}
+func (f *fakeRepository) ListAPIKeys(ctx context.Context) ([]*metadata.APIKey, error) {
+	panic("not implemented")
+}
+func (f *fakeRepository) TouchAPIKey(ctx context.Context, id string, now time.Time) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) RevokeAPIKey(ctx context.Context, id string, now time.Time) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) GetUploadSettings(ctx context.Context) (*metadata.UploadSettings, error) {
+	panic("not implemented")
+}
+func (f *fakeRepository) SeedUploadSettingsIfMissing(ctx context.Context, settings *metadata.UploadSettings) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) UpdateUploadSettings(ctx context.Context, settings *metadata.UploadSettings, updatedBy string, now time.Time) error {
+	panic("not implemented")
+}
 func (f *fakeRepository) Close() error { panic("not implemented") }
 
 func newTestCounters() (uploads, bytesTotal, errorsTotal prometheus.Counter) {

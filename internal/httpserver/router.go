@@ -114,6 +114,17 @@ func NewRouter(deps RouterDependencies) http.Handler {
 			adminRouter.With(apiKeysCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Delete("/api-keys/{id}", deps.AdminHandler.RevokeAPIKey)
 			adminRouter.Options("/api-keys", apiKeysCORS(noop).ServeHTTP)
 			adminRouter.Options("/api-keys/{id}", apiKeysCORS(noop).ServeHTTP)
+
+			// /admin/upload-settings lets an authenticated admin read and
+			// change the runtime-configurable upload limits (max size,
+			// allowed MIME types, blocked extensions) that
+			// upload.Validator enforces - see admin.Handler.
+			// UpdateUploadSettings for how a change here takes effect
+			// immediately on this instance.
+			uploadSettingsCORS := CORS(deps.AllowedOrigin, "GET, PUT, OPTIONS")
+			adminRouter.With(uploadSettingsCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Get("/upload-settings", deps.AdminHandler.GetUploadSettings)
+			adminRouter.With(uploadSettingsCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Put("/upload-settings", deps.AdminHandler.UpdateUploadSettings)
+			adminRouter.Options("/upload-settings", uploadSettingsCORS(noop).ServeHTTP)
 		})
 	})
 

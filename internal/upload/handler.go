@@ -17,9 +17,16 @@ import (
 )
 
 type Handler struct {
-	service            *Service
+	service *Service
+	// validator is consulted for the current max upload size on every
+	// request (via Validator.Snapshot), rather than a size baked in at
+	// NewHandler time, so that an admin raising or lowering the limit
+	// through PUT /api/v1/admin/upload-settings takes effect on the very
+	// next upload - including the MaxBytesReader cap below, which has to
+	// be enforced before the body is even read, not just in
+	// Service.Upload's later ValidateSize call.
+	validator          *Validator
 	concurrencyLimiter *ratelimit.ConcurrencyLimiter
-	maxUploadSizeBytes int64
 	ipHashSalt         string
 	uploadsTotal       prometheus.Counter
 	uploadBytesTotal   prometheus.Counter
@@ -27,11 +34,11 @@ type Handler struct {
 	logger             *slog.Logger
 }
 
-func NewHandler(service *Service, concurrencyLimiter *ratelimit.ConcurrencyLimiter, maxUploadSizeBytes int64, ipHashSalt string, uploadsTotal prometheus.Counter, uploadBytesTotal prometheus.Counter, uploadErrorsTotal prometheus.Counter, logger *slog.Logger) *Handler {
+func NewHandler(service *Service, validator *Validator, concurrencyLimiter *ratelimit.ConcurrencyLimiter, ipHashSalt string, uploadsTotal prometheus.Counter, uploadBytesTotal prometheus.Counter, uploadErrorsTotal prometheus.Counter, logger *slog.Logger) *Handler {
 	return &Handler{
 		service:            service,
+		validator:          validator,
 		concurrencyLimiter: concurrencyLimiter,
-		maxUploadSizeBytes: maxUploadSizeBytes,
 		ipHashSalt:         ipHashSalt,
 		uploadsTotal:       uploadsTotal,
 		uploadBytesTotal:   uploadBytesTotal,
@@ -67,7 +74,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.concurrencyLimiter.Release()
 
-	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadSizeBytes+(1<<20))
+	maxUploadSizeBytes, _, _ := h.validator.Snapshot()
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSizeBytes+(1<<20))
 
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		response.Error(w, http.StatusBadRequest, "invalid multipart form data")

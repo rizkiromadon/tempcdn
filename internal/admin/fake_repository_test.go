@@ -18,6 +18,7 @@ type fakeRepository struct {
 	sessionsByHash   map[string]*metadata.AdminSession
 	apiKeysByHash    map[string]*metadata.APIKey
 	apiKeysByID      map[string]*metadata.APIKey
+	uploadSettings   *metadata.UploadSettings
 
 	insertAdminErr        error
 	insertAdminSessionErr error
@@ -196,6 +197,34 @@ func (f *fakeRepository) RevokeAPIKey(ctx context.Context, id string, now time.T
 	if hashed, ok := f.apiKeysByHash[key.TokenHash]; ok {
 		hashed.RevokedAt = &now
 	}
+	return nil
+}
+
+func (f *fakeRepository) GetUploadSettings(ctx context.Context) (*metadata.UploadSettings, error) {
+	if f.uploadSettings == nil {
+		return nil, metadata.ErrUploadSettingsNotFound
+	}
+	copyOfSettings := *f.uploadSettings
+	return &copyOfSettings, nil
+}
+
+func (f *fakeRepository) SeedUploadSettingsIfMissing(ctx context.Context, settings *metadata.UploadSettings) error {
+	if f.uploadSettings != nil {
+		return nil
+	}
+	copyOfSettings := *settings
+	f.uploadSettings = &copyOfSettings
+	return nil
+}
+
+func (f *fakeRepository) UpdateUploadSettings(ctx context.Context, settings *metadata.UploadSettings, updatedBy string, now time.Time) error {
+	if f.uploadSettings == nil {
+		return metadata.ErrUploadSettingsNotFound
+	}
+	copyOfSettings := *settings
+	copyOfSettings.UpdatedAt = now
+	copyOfSettings.UpdatedBy = &updatedBy
+	f.uploadSettings = &copyOfSettings
 	return nil
 }
 

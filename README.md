@@ -110,7 +110,7 @@ for a ready-to-copy template.
 | Variable | Default | Description |
 |---|---|---|
 | `SERVER_PORT` | `8080` | Port the HTTP server listens on. |
-| `SERVER_MAX_UPLOAD_MB` | `100` | Maximum allowed upload size, in megabytes. |
+| `SERVER_MAX_UPLOAD_MB` | `100` | **Initial default only.** Seeds `max_upload_size_mb` the first time the server ever boots against a given database. After that, the live value lives in the `upload_settings` table and is changed via the admin API (`GET`/`PUT /api/v1/admin/upload-settings`), not by editing this variable — see [Upload Settings](#upload-settings) below. |
 | `R2_ACCESS_KEY_ID` | — | R2 S3-compatible access key ID. Required. |
 | `R2_SECRET_ACCESS_KEY` | — | R2 S3-compatible secret access key. Required. |
 | `R2_BUCKET_NAME` | `tempcdn-files` | Target R2 bucket name. |
@@ -126,8 +126,8 @@ for a ready-to-copy template.
 | `ALLOWED_ORIGIN` | — | Origin allowed to call this API from a browser. Required. |
 | `ADMIN_BOOTSTRAP_USERNAME` | — | Username for the first admin dashboard account, created on startup only if no admin account exists yet. Safe to leave set across restarts/redeploys — a no-op once an admin exists. |
 | `ADMIN_BOOTSTRAP_PASSWORD` | — | Password for the bootstrap admin account (min. 12 characters). If no admin account exists and this (and `ADMIN_BOOTSTRAP_USERNAME`) are unset, the server refuses to start. |
-| `ALLOWED_MIME_TYPES` | `image/*,video/*,application/pdf,application/zip,text/plain` | Comma-separated list of allowed MIME types/patterns. Supports `type/*` wildcards. |
-| `BLOCKED_EXTENSIONS` | `.exe,.bat,.sh,.msi,.dll,.scr` | Comma-separated list of blocked file extensions. Matched both as the file's final extension and as a substring earlier in the filename (e.g. `evil.exe.png` is also blocked). |
+| `ALLOWED_MIME_TYPES` | `image/*,video/*,application/pdf,application/zip,text/plain` | **Initial default only** — same one-time-seed caveat as `SERVER_MAX_UPLOAD_MB` above. Comma-separated list of allowed MIME types/patterns. Supports `type/*` wildcards. |
+| `BLOCKED_EXTENSIONS` | `.exe,.bat,.sh,.msi,.dll,.scr` | **Initial default only** — same one-time-seed caveat as `SERVER_MAX_UPLOAD_MB` above. Comma-separated list of blocked file extensions. Matched both as the file's final extension and as a substring earlier in the filename (e.g. `evil.exe.png` is also blocked). |
 | `NODE_ID` | random `hostname-xxxx` | This instance's identifier in the node liveness table (`GET /api/v1/nodes`). Set explicitly (e.g. `srv1`, `srv2`) when running multiple instances, for stable/readable rows across restarts. |
 | `NODE_HEARTBEAT_INTERVAL_SECONDS` | `15` | How often this instance updates its own liveness row. |
 | `NODE_STALE_AFTER_SECONDS` | `45` | How long a node's heartbeat can go stale before another instance flags it offline. Must be greater than `NODE_HEARTBEAT_INTERVAL_SECONDS`. |
@@ -359,6 +359,81 @@ Idempotent: revoking an already-revoked or unknown ID still returns
 { "revoked": true }
 ```
 
+### Upload Settings
+
+Reads and changes the runtime-configurable upload limits enforced by every
+instance sharing this database: maximum upload size, allowed MIME types,
+and blocked file extensions. These used to be fixed for the life of the
+process, set only via `SERVER_MAX_UPLOAD_MB` / `ALLOWED_MIME_TYPES` /
+`BLOCKED_EXTENSIONS` at boot; they're now stored in the `upload_settings`
+table and can be changed from the admin dashboard without a restart or
+redeploy. The environment variables still matter — they seed the initial
+row the very first time a server boots against a fresh database — but
+after that, this API is the source of truth. All endpoints below require a
+valid admin session (`Authorization: Bearer <session token>`, see
+[Authenticated requests](#authenticated-requests) above).
+
+Changes take effect immediately on the instance that handled the `PUT`
+request. In a multi-instance deployment (see "Running Multiple Instances"),
+other instances pick up the change the next time they restart and re-read
+`upload_settings` from the database; there is currently no live
+cross-instance push.
+
+#### Get current settings
+
+```
+GET /api/v1/admin/upload-settings
+Authorization: Bearer <session token>
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "max_upload_size_mb": 100,
+  "allowed_mime_types": ["image/*", "video/*", "application/pdf", "application/zip", "text/plain"],
+  "blocked_extensions": [".exe", ".bat", ".sh", ".msi", ".dll", ".scr"],
+  "updated_at": "2026-08-11T09:00:00Z",
+  "updated_by": "a1c4...7d02"
+}
+```
+
+`updated_by` is the admin ID who last changed these settings via `PUT`
+below, and is omitted if the row still holds its original boot-time seed
+and has never been changed since.
+
+#### Update settings
+
+```
+PUT /api/v1/admin/upload-settings
+Authorization: Bearer <session token>
+Content-Type: application/json
+
+{
+  "max_upload_size_mb": 250,
+  "allowed_mime_types": ["image/*", "video/*", "application/pdf"],
+  "blocked_extensions": [".exe", ".bat", ".sh", ".msi", ".dll", ".scr"]
+}
+```
+
+All three fields are required on every request — this isn't a partial/PATCH
+update, so submit the full current settings (e.g. pre-filled from a prior
+`GET`) with only the fields you want changed edited. Validation:
+
+- `max_upload_size_mb` must be a positive integer, and at most 10240 (10 GiB).
+- `allowed_mime_types` must contain at least one entry after trimming
+  whitespace and dropping empty strings — an empty allowlist would silently
+  reject every upload.
+- Every entry in `blocked_extensions` must start with `.` (e.g. `.exe`, not
+  `exe`) — a bare `exe` would never match and would silently be a no-op.
+  This list may otherwise be empty.
+
+**Response `200 OK`** — same shape as the `GET` response above, reflecting
+the newly saved values.
+
+**Response `400 Bad Request`** — the submitted settings failed one of the
+checks above; the error message identifies which one.
+
 ### Config
 
 Returns the server's current upload constraints, so a client can validate a
@@ -382,10 +457,12 @@ GET /api/v1/config
 }
 ```
 
-These values mirror `SERVER_MAX_UPLOAD_MB`, `ALLOWED_MIME_TYPES`,
-`BLOCKED_EXTENSIONS`, and `FILE_TTL_HOURS` (see [Configuration](#configuration))
-— this endpoint exists so a client doesn't need those environment variables
-hardcoded or duplicated on its own side.
+`max_upload_size_mb`, `allowed_mime_types`, and `blocked_extensions` reflect
+the live values from [Upload Settings](#upload-settings) above (initially
+seeded from `SERVER_MAX_UPLOAD_MB` / `ALLOWED_MIME_TYPES` /
+`BLOCKED_EXTENSIONS` — see [Configuration](#configuration) — but changeable
+afterward via the admin API without a restart). `file_ttl_hours` still
+mirrors `FILE_TTL_HOURS` directly, since that value isn't runtime-configurable.
 
 ### Stats
 
@@ -491,11 +568,13 @@ Content-Type: multipart/form-data
 
 **Validation rules**
 
-- File must not be empty and must not exceed `SERVER_MAX_UPLOAD_MB`.
-- File extension must not be in `BLOCKED_EXTENSIONS`.
+- File must not be empty and must not exceed the current `max_upload_size_mb`
+  (see [Upload Settings](#upload-settings) — initially seeded from
+  `SERVER_MAX_UPLOAD_MB`, but live-configurable afterward via the admin API).
+- File extension must not be in the current `blocked_extensions` list.
 - Content type is detected by sniffing the file's magic bytes (not by trusting
-  the client-supplied `Content-Type`) and must match a pattern in
-  `ALLOWED_MIME_TYPES`.
+  the client-supplied `Content-Type`) and must match a pattern in the current
+  `allowed_mime_types` list.
 - If the file content (SHA-256 checksum) matches an existing, non-expired
   file, no new object is uploaded to R2 — the existing record is returned
   with `duplicate: true`.

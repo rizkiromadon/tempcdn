@@ -432,4 +432,13 @@ func (f *metricsFakeRepository) RevokeAPIKey(ctx context.Context, id string, now
 	}
 	return nil
 }
+func (f *metricsFakeRepository) GetUploadSettings(ctx context.Context) (*metadata.UploadSettings, error) {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) SeedUploadSettingsIfMissing(ctx context.Context, settings *metadata.UploadSettings) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) UpdateUploadSettings(ctx context.Context, settings *metadata.UploadSettings, updatedBy string, now time.Time) error {
+	panic("not implemented")
+}
 func (f *metricsFakeRepository) Close() error { panic("not implemented") }

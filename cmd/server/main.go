@@ -70,6 +70,26 @@ func main() {
 	adminSessionJanitor := admin.NewSessionJanitor(repository, log)
 	go adminSessionJanitor.Run(rootCtx)
 
+	// Seeds the initial upload_settings row from SERVER_MAX_UPLOAD_MB /
+	// ALLOWED_MIME_TYPES / BLOCKED_EXTENSIONS if it doesn't already exist -
+	// no-op on every boot after the first, so an admin's later changes via
+	// PUT /api/v1/admin/upload-settings survive restarts/redeploys instead
+	// of being overwritten back to these env var defaults.
+	if err := admin.SeedUploadSettings(rootCtx, repository, admin.UploadSettingsDefaults{
+		MaxUploadSizeMB:   cfg.ServerMaxUploadMB,
+		AllowedMimeTypes:  cfg.AllowedMimeTypes,
+		BlockedExtensions: cfg.BlockedExtensions,
+	}); err != nil {
+		log.Error("failed to seed upload settings", "error", err)
+		os.Exit(1)
+	}
+
+	uploadSettings, err := repository.GetUploadSettings(rootCtx)
+	if err != nil {
+		log.Error("failed to load upload settings", "error", err)
+		os.Exit(1)
+	}
+
 	objectStorage, err := storage.NewR2Client(rootCtx, storage.R2ClientConfig{
 		AccessKeyID:     cfg.R2AccessKeyID,
 		SecretAccessKey: cfg.R2SecretAccessKey,
@@ -83,11 +103,29 @@ func main() {
 
 	metrics := httpserver.NewMetrics()
 
+	// validator is seeded from the database (not directly from cfg), so
+	// that a value an admin previously set via PUT
+	// /api/v1/admin/upload-settings survives this restart. Its rules can
+	// change again at runtime after boot - see the
+	// SetUploadSettingsUpdatedCallback wiring below - without needing
+	// another restart.
 	validator := upload.NewValidator(
-		cfg.ServerMaxUploadMB*1024*1024,
-		cfg.AllowedMimeTypes,
-		cfg.BlockedExtensions,
+		uploadSettings.MaxUploadSizeMB*1024*1024,
+		uploadSettings.AllowedMimeTypes,
+		uploadSettings.BlockedExtensions,
 	)
+
+	// Whenever an admin successfully changes upload settings through the
+	// API, push the new values into this instance's in-memory validator
+	// immediately. Note this only updates the instance that served the
+	// request - see the README/deployment notes for multi-instance
+	// (srv1/srv2/srv3) deployments on how other instances pick up the
+	// change (each instance re-reads upload_settings from the database on
+	// its own restart; near-term cross-instance propagation without a
+	// restart is not yet implemented).
+	adminHandler.SetUploadSettingsUpdatedCallback(func(settings *metadata.UploadSettings) {
+		validator.Update(settings.MaxUploadSizeMB*1024*1024, settings.AllowedMimeTypes, settings.BlockedExtensions)
+	})
 
 	uploadService := upload.NewService(
 		repository,
@@ -101,8 +139,8 @@ func main() {
 
 	uploadHandler := upload.NewHandler(
 		uploadService,
+		validator,
 		concurrencyLimiter,
-		cfg.ServerMaxUploadMB*1024*1024,
 		cfg.IPHashSalt,
 		metrics.UploadsTotal,
 		metrics.UploadBytesTotal,
@@ -118,12 +156,7 @@ func main() {
 	fileService := file.NewService(repository, objectStorage, cachePurger, cfg.CloudflareCacheEnabled, log)
 	fileHandler := file.NewHandler(fileService)
 
-	configHandler := upload.NewConfigHandler(
-		cfg.ServerMaxUploadMB,
-		cfg.AllowedMimeTypes,
-		cfg.BlockedExtensions,
-		cfg.FileTTLHours,
-	)
+	configHandler := upload.NewConfigHandler(validator, cfg.FileTTLHours)
 
 	statsHandler := stats.NewHandler(
 		repository,

@@ -94,3 +94,58 @@ func TestBootstrapTreatsUsernameCollisionAsSuccessNotFailure(t *testing.T) {
 		t.Fatalf("expected username-collision race to be treated as success, got: %v", err)
 	}
 }
+
+func TestSeedUploadSettingsCreatesRowWhenNoneExist(t *testing.T) {
+	repo := newFakeRepository()
+
+	err := SeedUploadSettings(context.Background(), repo, UploadSettingsDefaults{
+		MaxUploadSizeMB:   100,
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: []string{".exe"},
+	})
+	if err != nil {
+		t.Fatalf("expected seed to succeed, got: %v", err)
+	}
+
+	settings, exists := repo.uploadSettings, repo.uploadSettings != nil
+	if !exists {
+		t.Fatal("expected an upload_settings row to be created")
+	}
+	if settings.MaxUploadSizeMB != 100 {
+		t.Errorf("expected max_upload_size_mb=100, got %d", settings.MaxUploadSizeMB)
+	}
+	if settings.UpdatedBy != nil {
+		t.Error("expected updated_by to be nil for a boot-time seed, not an admin-initiated change")
+	}
+}
+
+// TestSeedUploadSettingsIsNoOpWhenRowAlreadyExists guards the same
+// restart-safety property as TestBootstrapIsNoOpWhenAdminsAlreadyExist: a
+// later boot with different env-var-derived defaults must not overwrite
+// settings an admin has since changed via Service.UpdateUploadSettings.
+func TestSeedUploadSettingsIsNoOpWhenRowAlreadyExists(t *testing.T) {
+	repo := newFakeRepository()
+
+	if err := SeedUploadSettings(context.Background(), repo, UploadSettingsDefaults{
+		MaxUploadSizeMB:   100,
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: []string{".exe"},
+	}); err != nil {
+		t.Fatalf("first seed failed: %v", err)
+	}
+
+	// Simulate an admin having since changed the settings.
+	repo.uploadSettings.MaxUploadSizeMB = 999
+
+	if err := SeedUploadSettings(context.Background(), repo, UploadSettingsDefaults{
+		MaxUploadSizeMB:   100,
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: []string{".exe"},
+	}); err != nil {
+		t.Fatalf("second seed (simulating a restart) failed: %v", err)
+	}
+
+	if repo.uploadSettings.MaxUploadSizeMB != 999 {
+		t.Errorf("expected admin-changed value 999 to survive re-seed, got %d", repo.uploadSettings.MaxUploadSizeMB)
+	}
+}

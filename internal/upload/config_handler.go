@@ -14,30 +14,31 @@ type ConfigResponse struct {
 	FileTTLHours       int      `json:"file_ttl_hours"`
 }
 
+// ConfigHandler serves the public, read-only GET /api/v1/config endpoint.
+// It reads live values from the shared Validator (see Validator.Snapshot)
+// rather than values fixed at startup, so this endpoint always reflects
+// whatever an admin most recently set via PUT
+// /api/v1/admin/upload-settings, without needing its own copy of the
+// current settings or a restart to pick up a change.
 type ConfigHandler struct {
-	maxUploadSizeBytes int64
-	maxUploadSizeMB    int64
-	allowedMimeTypes   []string
-	blockedExtensions  []string
-	fileTTLHours       int
+	validator    *Validator
+	fileTTLHours int
 }
 
-func NewConfigHandler(maxUploadSizeMB int64, allowedMimeTypes []string, blockedExtensions []string, fileTTLHours int) *ConfigHandler {
+func NewConfigHandler(validator *Validator, fileTTLHours int) *ConfigHandler {
 	return &ConfigHandler{
-		maxUploadSizeBytes: maxUploadSizeMB * 1024 * 1024,
-		maxUploadSizeMB:    maxUploadSizeMB,
-		allowedMimeTypes:   allowedMimeTypes,
-		blockedExtensions:  blockedExtensions,
-		fileTTLHours:       fileTTLHours,
+		validator:    validator,
+		fileTTLHours: fileTTLHours,
 	}
 }
 
 func (h *ConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	maxSizeBytes, allowedMimeTypes, blockedExtensions := h.validator.Snapshot()
 	response.JSON(w, http.StatusOK, ConfigResponse{
-		MaxUploadSizeBytes: h.maxUploadSizeBytes,
-		MaxUploadSizeMB:    h.maxUploadSizeMB,
-		AllowedMimeTypes:   h.allowedMimeTypes,
-		BlockedExtensions:  h.blockedExtensions,
+		MaxUploadSizeBytes: maxSizeBytes,
+		MaxUploadSizeMB:    maxSizeBytes / (1024 * 1024),
+		AllowedMimeTypes:   allowedMimeTypes,
+		BlockedExtensions:  blockedExtensions,
 		FileTTLHours:       h.fileTTLHours,
 	})
 }

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/tempcdn/tempcdn/internal/metadata"
 )
 
 func testLogger() *slog.Logger {
@@ -209,5 +211,139 @@ func TestHandlerMeReturnsCurrentAdminUsername(t *testing.T) {
 	}
 	if body["username"] != "alice" {
 		t.Errorf("expected username 'alice', got %q", body["username"])
+	}
+}
+
+func TestHandlerGetUploadSettingsReturnsCurrentValues(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	svc := NewService(repo)
+	handler := NewHandler(svc, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/upload-settings", nil)
+	rec := httptest.NewRecorder()
+
+	handler.GetUploadSettings(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body uploadSettingsResponseBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if body.MaxUploadSizeMB != 100 {
+		t.Errorf("expected max_upload_size_mb=100, got %d", body.MaxUploadSizeMB)
+	}
+}
+
+func TestHandlerUpdateUploadSettingsPersistsChangeAndInvokesCallback(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	newTestAdmin(t, repo, "alice", "correct-horse-battery-staple")
+	svc := NewService(repo)
+	handler := NewHandler(svc, testLogger())
+
+	loginResult, err := svc.Login(context.Background(), "alice", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatalf("login failed: %v", err)
+	}
+	session, err := svc.VerifySession(context.Background(), loginResult.Token)
+	if err != nil {
+		t.Fatalf("verify session failed: %v", err)
+	}
+
+	var callbackSettings *metadata.UploadSettings
+	handler.SetUploadSettingsUpdatedCallback(func(s *metadata.UploadSettings) {
+		callbackSettings = s
+	})
+
+	body, _ := json.Marshal(updateUploadSettingsRequestBody{
+		MaxUploadSizeMB:   500,
+		AllowedMimeTypes:  []string{"image/*", "video/*"},
+		BlockedExtensions: []string{".exe"},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/upload-settings", bytes.NewReader(body))
+	ctx := context.WithValue(req.Context(), sessionContextKey, session)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.UpdateUploadSettings(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp uploadSettingsResponseBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.MaxUploadSizeMB != 500 {
+		t.Errorf("expected max_upload_size_mb=500 in response, got %d", resp.MaxUploadSizeMB)
+	}
+
+	if callbackSettings == nil {
+		t.Fatal("expected onUploadSettingsUpdated callback to be invoked")
+	}
+	if callbackSettings.MaxUploadSizeMB != 500 {
+		t.Errorf("expected callback to receive max_upload_size_mb=500, got %d", callbackSettings.MaxUploadSizeMB)
+	}
+
+	stored, err := svc.GetUploadSettings(context.Background())
+	if err != nil {
+		t.Fatalf("failed to re-read settings: %v", err)
+	}
+	if stored.MaxUploadSizeMB != 500 {
+		t.Errorf("expected persisted max_upload_size_mb=500, got %d", stored.MaxUploadSizeMB)
+	}
+}
+
+func TestHandlerUpdateUploadSettingsReturns400OnInvalidInput(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	newTestAdmin(t, repo, "alice", "correct-horse-battery-staple")
+	svc := NewService(repo)
+	handler := NewHandler(svc, testLogger())
+
+	loginResult, err := svc.Login(context.Background(), "alice", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatalf("login failed: %v", err)
+	}
+	session, err := svc.VerifySession(context.Background(), loginResult.Token)
+	if err != nil {
+		t.Fatalf("verify session failed: %v", err)
+	}
+
+	body, _ := json.Marshal(updateUploadSettingsRequestBody{
+		MaxUploadSizeMB:   0, // invalid
+		AllowedMimeTypes:  []string{"image/*"},
+		BlockedExtensions: nil,
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/upload-settings", bytes.NewReader(body))
+	ctx := context.WithValue(req.Context(), sessionContextKey, session)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.UpdateUploadSettings(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerUpdateUploadSettingsReturns400OnMalformedBody(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestUploadSettings(t, repo)
+	svc := NewService(repo)
+	handler := NewHandler(svc, testLogger())
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/upload-settings", bytes.NewReader([]byte("not json")))
+	rec := httptest.NewRecorder()
+
+	handler.UpdateUploadSettings(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for malformed body, got %d", rec.Code)
 	}
 }

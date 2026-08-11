@@ -260,6 +260,125 @@ func (s *Service) VerifyAPIKey(ctx context.Context, key string) (*metadata.APIKe
 	return record, nil
 }
 
+// ErrInvalidUploadSettings is returned by UpdateUploadSettings when the
+// requested values fail basic sanity checks (see validateUploadSettings).
+// Wrapped with %w so a caller wanting the specific message can still
+// unwrap it, while errors.Is(err, ErrInvalidUploadSettings) works for a
+// simple "was this the client's fault" check.
+var ErrInvalidUploadSettings = errors.New("invalid upload settings")
+
+// maxUploadSizeMBCeiling is a hard sanity ceiling on max_upload_size_mb,
+// independent of whatever an admin might mistakenly type into the
+// dashboard - e.g. protects against a stray extra digit (100 -> 1000000)
+// silently pinning every instance's memory/disk spooling to an
+// unreasonable size. 10 GiB comfortably covers real-world CDN use cases
+// (large video/archive uploads) while still catching typos.
+const maxUploadSizeMBCeiling = 10240
+
+// GetUploadSettings returns the current runtime-configurable upload
+// limits (max size, allowed MIME types, blocked extensions), for the
+// admin dashboard's settings view.
+func (s *Service) GetUploadSettings(ctx context.Context) (*metadata.UploadSettings, error) {
+	settings, err := s.repository.GetUploadSettings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get upload settings: %w", err)
+	}
+	return settings, nil
+}
+
+// UpdateUploadSettingsInput carries the fields an admin can change. All
+// three are required (not partial/PATCH-style) so a caller can't
+// accidentally end up with, say, an empty MIME allowlist by omitting the
+// field - the admin dashboard is expected to always submit the full
+// current settings, pre-filled from a prior GetUploadSettings call, with
+// the fields they want to change edited.
+type UpdateUploadSettingsInput struct {
+	MaxUploadSizeMB   int64
+	AllowedMimeTypes  []string
+	BlockedExtensions []string
+}
+
+// UpdateUploadSettings validates and persists new upload limits, taking
+// effect immediately (the caller, internal/httpserver's admin handler, is
+// responsible for also calling Validator.Update with the same values so
+// in-memory validation matches the database - see admin.Handler.
+// UpdateUploadSettings). adminID is recorded as updated_by for
+// accountability.
+func (s *Service) UpdateUploadSettings(ctx context.Context, adminID string, input UpdateUploadSettingsInput) (*metadata.UploadSettings, error) {
+	normalized, err := validateUploadSettings(input)
+	if err != nil {
+		return nil, err
+	}
+
+	now := s.now()
+	settings := &metadata.UploadSettings{
+		MaxUploadSizeMB:   normalized.MaxUploadSizeMB,
+		AllowedMimeTypes:  normalized.AllowedMimeTypes,
+		BlockedExtensions: normalized.BlockedExtensions,
+		UpdatedAt:         now,
+		UpdatedBy:         &adminID,
+	}
+	if err := s.repository.UpdateUploadSettings(ctx, settings, adminID, now); err != nil {
+		return nil, fmt.Errorf("update upload settings: %w", err)
+	}
+	return settings, nil
+}
+
+// validateUploadSettings checks and normalizes an UpdateUploadSettingsInput.
+// Trims whitespace and drops empty entries from both list fields (the same
+// leniency config.splitAndTrim gave the old ALLOWED_MIME_TYPES/
+// BLOCKED_EXTENSIONS environment variables), and requires:
+//   - a positive max size within maxUploadSizeMBCeiling
+//   - at least one allowed MIME pattern (an empty allowlist would silently
+//     reject every upload, which is never the admin's intent even if they
+//     forgot to fill it in)
+//   - every blocked extension starting with "." (a bare "exe" would never
+//     match filepath.Ext's output, silently making that entry a no-op)
+//
+// Blocked extensions may legitimately be empty (an operator choosing to
+// rely on MIME allowlisting alone), so that list has no minimum-length
+// check.
+func validateUploadSettings(input UpdateUploadSettingsInput) (UpdateUploadSettingsInput, error) {
+	if input.MaxUploadSizeMB <= 0 {
+		return UpdateUploadSettingsInput{}, fmt.Errorf("%w: max_upload_size_mb must be positive", ErrInvalidUploadSettings)
+	}
+	if input.MaxUploadSizeMB > maxUploadSizeMBCeiling {
+		return UpdateUploadSettingsInput{}, fmt.Errorf("%w: max_upload_size_mb must not exceed %d", ErrInvalidUploadSettings, maxUploadSizeMBCeiling)
+	}
+
+	allowedMimeTypes := normalizeStringList(input.AllowedMimeTypes)
+	if len(allowedMimeTypes) == 0 {
+		return UpdateUploadSettingsInput{}, fmt.Errorf("%w: allowed_mime_types must not be empty", ErrInvalidUploadSettings)
+	}
+
+	blockedExtensions := normalizeStringList(input.BlockedExtensions)
+	for _, ext := range blockedExtensions {
+		if !strings.HasPrefix(ext, ".") {
+			return UpdateUploadSettingsInput{}, fmt.Errorf("%w: blocked extension %q must start with \".\"", ErrInvalidUploadSettings, ext)
+		}
+	}
+
+	return UpdateUploadSettingsInput{
+		MaxUploadSizeMB:   input.MaxUploadSizeMB,
+		AllowedMimeTypes:  allowedMimeTypes,
+		BlockedExtensions: blockedExtensions,
+	}, nil
+}
+
+// normalizeStringList trims whitespace from every entry and drops any
+// that end up empty, without deduplicating (an admin listing the same
+// entry twice is harmless, not worth rejecting).
+func normalizeStringList(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, v := range values {
+		trimmed := strings.TrimSpace(v)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
 // dummyPasswordHash is a valid bcrypt hash of an arbitrary fixed string,
 // used as the comparison target in Login when no admin account matches
 // the given username, so bcrypt.CompareHashAndPassword still does a full
