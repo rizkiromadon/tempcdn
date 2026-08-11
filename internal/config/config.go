@@ -51,8 +51,6 @@ type Config struct {
 
 	AllowedOrigin string
 
-	MetricsToken string
-
 	// AdminBootstrapUsername/Password seed the first admin account on
 	// startup, only if no admin account already exists (see
 	// internal/admin.Bootstrap). Safe to leave set across restarts/redeploys.
@@ -78,7 +76,6 @@ func Load() (*Config, error) {
 		R2PublicBaseURL:   os.Getenv("R2_PUBLIC_BASE_URL"),
 		IPHashSalt:        getEnvOrDefault("IP_HASH_SALT", insecureDefaultIPHashSalt),
 		AllowedOrigin:     os.Getenv("ALLOWED_ORIGIN"),
-		MetricsToken:      os.Getenv("METRICS_TOKEN"),
 		NodeID:            os.Getenv("NODE_ID"),
 
 		AdminBootstrapUsername: os.Getenv("ADMIN_BOOTSTRAP_USERNAME"),

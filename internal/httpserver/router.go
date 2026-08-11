@@ -1,8 +1,6 @@
 package httpserver
 
 import (
-	"crypto/subtle"
-	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -28,14 +26,7 @@ type RouterDependencies struct {
 	AdminHandler      *admin.Handler
 	AdminService      *admin.Service
 	AllowedOrigin     string
-	// MetricsToken, if non-empty, is accepted as a Bearer token (or
-	// X-Metrics-Token header) on /metrics requests, as an alternative to a
-	// logged-in admin session - kept for existing Prometheus scrape
-	// configs that predate admin auth. CORS alone is a browser-enforced
-	// policy and does nothing to stop direct curl/server-to-server access,
-	// so this (or a valid admin session) is the actual access control.
-	MetricsToken   string
-	RequestLatency *prometheus.HistogramVec
+	RequestLatency    *prometheus.HistogramVec
 }
 
 func NewRouter(deps RouterDependencies) http.Handler {
@@ -62,7 +53,7 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	// 200 instead of a 405.
 	router.With(healthCORS).Head("/healthz", handleHealthCheckHead)
 	router.Options("/healthz", healthCORS(noop).ServeHTTP)
-	router.With(metricsCORS, metricsAuth(deps.MetricsToken, deps.AdminService, deps.Logger)).Handle("/metrics", promhttp.Handler())
+	router.With(metricsCORS, metricsAuth(deps.AdminService, deps.Logger)).Handle("/metrics", promhttp.Handler())
 	router.Options("/metrics", metricsCORS(noop).ServeHTTP)
 
 	router.Route("/api/v1", func(apiRouter chi.Router) {
@@ -116,6 +107,13 @@ func NewRouter(deps RouterDependencies) http.Handler {
 
 			adminRouter.With(adminCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Get("/me", deps.AdminHandler.Me)
 			adminRouter.Options("/me", adminCORS(noop).ServeHTTP)
+
+			apiKeysCORS := CORS(deps.AllowedOrigin, "GET, POST, DELETE, OPTIONS")
+			adminRouter.With(apiKeysCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Post("/api-keys", deps.AdminHandler.CreateAPIKey)
+			adminRouter.With(apiKeysCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Get("/api-keys", deps.AdminHandler.ListAPIKeys)
+			adminRouter.With(apiKeysCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Delete("/api-keys/{id}", deps.AdminHandler.RevokeAPIKey)
+			adminRouter.Options("/api-keys", apiKeysCORS(noop).ServeHTTP)
+			adminRouter.Options("/api-keys/{id}", apiKeysCORS(noop).ServeHTTP)
 		})
 	})
 
@@ -155,51 +153,40 @@ func filePreflightCORS(getCORS, deleteCORS func(http.Handler) http.Handler, next
 	})
 }
 
-// metricsAuth requires either a valid admin session or the legacy
-// shared-secret METRICS_TOKEN on /metrics, since CORS is a
-// browser-enforced policy only and does nothing to stop direct
-// curl/server-to-server access. The admin session check runs first since
-// it's the primary mechanism going forward; METRICS_TOKEN is accepted
-// alongside it purely for existing Prometheus scrape configs that predate
-// admin auth and can't easily be reconfigured to log in. Admin auth is
-// always available once the server has an admin service configured, but
-// metrics access itself only becomes gated once an operator opts in by
-// setting METRICS_TOKEN - this preserves the pre-admin-auth default of
-// open /metrics (e.g. local development, or scraping over a trusted
-// internal network) rather than silently starting to require login on
-// every existing deployment the moment this code ships.
-func metricsAuth(token string, adminService *admin.Service, logger *slog.Logger) func(http.Handler) http.Handler {
+// metricsAuth requires either a valid admin session or a valid,
+// non-revoked API key (created via POST /api/v1/admin/api-keys) on
+// /metrics, since CORS is a browser-enforced policy only and does nothing
+// to stop direct curl/server-to-server access. API keys are the
+// replacement for the old static METRICS_TOKEN environment variable:
+// database-backed and revocable from the admin dashboard, rather than a
+// single shared secret that could only be rotated by redeploying with a
+// new environment variable. Metrics access is gated unconditionally
+// whenever an admin service is configured - unlike the old METRICS_TOKEN
+// default-open behavior, there is no "unset" state here, since an admin
+// account (and therefore the ability to mint an API key) always exists
+// once the server has bootstrapped.
+func metricsAuth(adminService *admin.Service, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		if token == "" {
+		if adminService == nil {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			bearerToken := extractBearerOrHeaderToken(r)
-
-			if adminService != nil {
-				if _, err := adminService.VerifySession(r.Context(), bearerToken); err == nil {
-					next.ServeHTTP(w, r)
-					return
-				} else if !errors.Is(err, admin.ErrSessionInvalid) {
-					logger.Error("metrics_admin_session_verify_failed", "error", err)
-				}
-			}
-
-			if token != "" && subtle.ConstantTimeCompare([]byte(bearerToken), []byte(token)) == 1 {
+			credential := extractBearerOrHeaderToken(r)
+			if admin.VerifyAPIKeyOrAdminSession(r.Context(), credential, adminService, logger) {
 				next.ServeHTTP(w, r)
 				return
 			}
-
 			response.Error(w, http.StatusUnauthorized, "missing or invalid metrics credentials")
 		})
 	}
 }
 
-// extractBearerOrHeaderToken reads a token from the X-Metrics-Token
-// header, falling back to a Bearer Authorization header. The same
-// plaintext value is tried both as an admin session token and (in
-// metricsAuth) as the legacy METRICS_TOKEN, since a caller supplies one
-// or the other, not both.
+// extractBearerOrHeaderToken reads a credential from the X-Metrics-Token
+// header (kept as an alternate header name for existing Prometheus scrape
+// configs), falling back to a Bearer Authorization header. The same
+// plaintext value is tried against both an admin session and an API key
+// (see admin.VerifyAPIKeyOrAdminSession), since a caller supplies one or
+// the other, not both.
 func extractBearerOrHeaderToken(r *http.Request) string {
 	if provided := r.Header.Get("X-Metrics-Token"); provided != "" {
 		return provided

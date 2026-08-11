@@ -22,6 +22,34 @@ func SessionFromContext(ctx context.Context) (*Session, bool) {
 	return session, ok
 }
 
+// VerifyAPIKeyOrAdminSession checks the given credential (usually read
+// from a Bearer Authorization header or a custom header) against either a
+// valid admin session or a valid, non-revoked API key, in that order.
+// Returns nil if either check succeeds. This is the shared authorization
+// check behind server-to-server endpoints like /metrics that need to
+// accept both an operator's logged-in session and a long-lived API key
+// (e.g. for a Prometheus scrape config that can't log in interactively).
+// Unlike RequireAdminSession, this is a plain function rather than chi
+// middleware, since callers like metricsAuth need to run it conditionally
+// (only once an API-key-or-session gate has actually been enabled) rather
+// than unconditionally on every request.
+func VerifyAPIKeyOrAdminSession(ctx context.Context, credential string, service *Service, logger *slog.Logger) bool {
+	if credential == "" {
+		return false
+	}
+	if _, err := service.VerifySession(ctx, credential); err == nil {
+		return true
+	} else if !errors.Is(err, ErrSessionInvalid) {
+		logger.Error("api_key_admin_session_verify_failed", "error", err)
+	}
+	if _, err := service.VerifyAPIKey(ctx, credential); err == nil {
+		return true
+	} else if !errors.Is(err, ErrAPIKeyInvalid) {
+		logger.Error("api_key_verify_failed", "error", err)
+	}
+	return false
+}
+
 // RequireAdminSession is standard chi-style middleware: it rejects any
 // request without a valid "Authorization: Bearer <token>" session token,
 // and on success stores the resolved *Session in the request context for

@@ -1,11 +1,16 @@
 package httpserver
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/tempcdn/tempcdn/internal/admin"
+	"github.com/tempcdn/tempcdn/internal/metadata"
 )
 
 // testLogger returns a discard-output logger for tests that need a
@@ -187,17 +192,15 @@ func TestHealthzGetStillReturnsBody(t *testing.T) {
 	}
 }
 
-// TestMetricsOpenWhenNoTokenConfigured guards the pre-admin-auth default:
-// deployments that never set METRICS_TOKEN (e.g. local development, or
-// scraping over a trusted internal network) must keep working exactly as
-// before, with no login required, even though an AdminService now always
-// exists in a real deployment.
-func TestMetricsOpenWhenNoTokenConfigured(t *testing.T) {
+// TestMetricsOpenWhenNoAdminServiceConfigured guards a router constructed
+// without an AdminService at all (e.g. a minimal test setup): /metrics
+// must stay reachable rather than panicking or hard-failing, since there
+// is no credential store to check requests against.
+func TestMetricsOpenWhenNoAdminServiceConfigured(t *testing.T) {
 	router := NewRouter(RouterDependencies{
 		Logger:        testLogger(),
 		AllowedOrigin: "https://app.example.com",
-		// MetricsToken intentionally left empty; AdminService intentionally nil,
-		// mirroring a router constructed before admin auth existed.
+		// AdminService intentionally nil.
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
@@ -205,18 +208,18 @@ func TestMetricsOpenWhenNoTokenConfigured(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 OK for GET /metrics with no token configured, got %d", rec.Code)
+		t.Errorf("expected 200 OK for GET /metrics with no admin service configured, got %d", rec.Code)
 	}
 }
 
-// TestMetricsRejectsRequestWithNoCredentialsWhenTokenConfigured guards the
-// existing token-gating behavior: once an operator sets METRICS_TOKEN, an
-// unauthenticated request must be rejected.
-func TestMetricsRejectsRequestWithNoCredentialsWhenTokenConfigured(t *testing.T) {
+// TestMetricsRejectsRequestWithNoCredentials guards the actual access
+// control on /metrics once an AdminService is configured (the normal case
+// in a real deployment): an unauthenticated request must be rejected.
+func TestMetricsRejectsRequestWithNoCredentials(t *testing.T) {
 	router := NewRouter(RouterDependencies{
 		Logger:        testLogger(),
 		AllowedOrigin: "https://app.example.com",
-		MetricsToken:  "shared-secret",
+		AdminService:  admin.NewService(newMetricsFakeRepository()),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
@@ -228,51 +231,205 @@ func TestMetricsRejectsRequestWithNoCredentialsWhenTokenConfigured(t *testing.T)
 	}
 }
 
-// TestMetricsAcceptsValidLegacyToken guards backward compatibility for
-// existing Prometheus scrape configs that predate admin auth: the
-// METRICS_TOKEN path must keep working exactly as before, whether sent as
-// X-Metrics-Token or as a Bearer Authorization header.
-func TestMetricsAcceptsValidLegacyToken(t *testing.T) {
+// TestMetricsAcceptsValidAPIKey covers the API key path - the replacement
+// for the old static METRICS_TOKEN environment variable - accepted either
+// as X-Metrics-Token or as a Bearer Authorization header.
+func TestMetricsAcceptsValidAPIKey(t *testing.T) {
+	repo := newMetricsFakeRepository()
+	adminService := admin.NewService(repo)
+	ctx := context.Background()
+	result, err := adminService.CreateAPIKey(ctx, "prometheus-prod")
+	if err != nil {
+		t.Fatalf("failed to create api key: %v", err)
+	}
+
 	router := NewRouter(RouterDependencies{
 		Logger:        testLogger(),
 		AllowedOrigin: "https://app.example.com",
-		MetricsToken:  "shared-secret",
+		AdminService:  adminService,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.Header.Set("X-Metrics-Token", "shared-secret")
+	req.Header.Set("X-Metrics-Token", result.Key)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 OK for GET /metrics with valid X-Metrics-Token, got %d", rec.Code)
+		t.Errorf("expected 200 OK for GET /metrics with valid API key via X-Metrics-Token, got %d", rec.Code)
 	}
 
 	reqBearer := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	reqBearer.Header.Set("Authorization", "Bearer shared-secret")
+	reqBearer.Header.Set("Authorization", "Bearer "+result.Key)
 	recBearer := httptest.NewRecorder()
 	router.ServeHTTP(recBearer, reqBearer)
 
 	if recBearer.Code != http.StatusOK {
-		t.Errorf("expected 200 OK for GET /metrics with valid Bearer token, got %d", recBearer.Code)
+		t.Errorf("expected 200 OK for GET /metrics with valid API key via Bearer, got %d", recBearer.Code)
 	}
 }
 
-// TestMetricsRejectsInvalidLegacyToken guards against a wrong/garbage
-// token being accepted just because METRICS_TOKEN is configured.
-func TestMetricsRejectsInvalidLegacyToken(t *testing.T) {
+// TestMetricsRejectsRevokedAPIKey guards that a revoked API key no longer
+// authenticates, even though its row (and hash) still exist.
+func TestMetricsRejectsRevokedAPIKey(t *testing.T) {
+	repo := newMetricsFakeRepository()
+	adminService := admin.NewService(repo)
+	ctx := context.Background()
+	result, err := adminService.CreateAPIKey(ctx, "prometheus-prod")
+	if err != nil {
+		t.Fatalf("failed to create api key: %v", err)
+	}
+	if err := adminService.RevokeAPIKey(ctx, result.Record.ID); err != nil {
+		t.Fatalf("failed to revoke api key: %v", err)
+	}
+
 	router := NewRouter(RouterDependencies{
 		Logger:        testLogger(),
 		AllowedOrigin: "https://app.example.com",
-		MetricsToken:  "shared-secret",
+		AdminService:  adminService,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.Header.Set("X-Metrics-Token", "wrong-token")
+	req.Header.Set("X-Metrics-Token", result.Key)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 for GET /metrics with invalid token, got %d", rec.Code)
+		t.Errorf("expected 401 for GET /metrics with revoked API key, got %d", rec.Code)
 	}
 }
+
+// TestMetricsRejectsInvalidAPIKey guards against a wrong/garbage
+// credential being accepted.
+func TestMetricsRejectsInvalidAPIKey(t *testing.T) {
+	router := NewRouter(RouterDependencies{
+		Logger:        testLogger(),
+		AllowedOrigin: "https://app.example.com",
+		AdminService:  admin.NewService(newMetricsFakeRepository()),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("X-Metrics-Token", "tcdn_wrong-key")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for GET /metrics with invalid API key, got %d", rec.Code)
+	}
+}
+
+// metricsFakeRepository is a minimal in-memory metadata.Repository stub
+// covering only the API-key methods exercised by the /metrics auth tests
+// above. Every other method panics if called.
+type metricsFakeRepository struct {
+	apiKeysByHash map[string]*metadata.APIKey
+	apiKeysByID   map[string]*metadata.APIKey
+}
+
+func newMetricsFakeRepository() *metricsFakeRepository {
+	return &metricsFakeRepository{
+		apiKeysByHash: make(map[string]*metadata.APIKey),
+		apiKeysByID:   make(map[string]*metadata.APIKey),
+	}
+}
+
+func (f *metricsFakeRepository) Migrate(ctx context.Context) error { panic("not implemented") }
+func (f *metricsFakeRepository) Insert(ctx context.Context, record *metadata.FileRecord) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) FindActiveByChecksum(ctx context.Context, checksum string, now time.Time) (*metadata.FileRecord, error) {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) FindByID(ctx context.Context, id string) (*metadata.FileRecord, error) {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) DeleteByID(ctx context.Context, id string) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) FindExpired(ctx context.Context, before time.Time, limit int) ([]*metadata.FileRecord, error) {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) Stats(ctx context.Context, now time.Time) (*metadata.Stats, error) {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error) {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) ListNodeStatus(ctx context.Context) ([]*metadata.NodeStatus, error) {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) InsertAdmin(ctx context.Context, admin *metadata.Admin) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) FindAdminByUsername(ctx context.Context, username string) (*metadata.Admin, error) {
+	return nil, metadata.ErrAdminNotFound
+}
+func (f *metricsFakeRepository) FindAdminByID(ctx context.Context, id string) (*metadata.Admin, error) {
+	return nil, metadata.ErrAdminNotFound
+}
+func (f *metricsFakeRepository) CountAdmins(ctx context.Context) (int64, error) { return 0, nil }
+func (f *metricsFakeRepository) TouchAdminLastLogin(ctx context.Context, adminID string, now time.Time) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) InsertAdminSession(ctx context.Context, session *metadata.AdminSession) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) FindAdminSessionByTokenHash(ctx context.Context, tokenHash string) (*metadata.AdminSession, error) {
+	return nil, metadata.ErrAdminSessionNotFound
+}
+func (f *metricsFakeRepository) TouchAdminSession(ctx context.Context, tokenHash string, now time.Time) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) DeleteAdminSession(ctx context.Context, tokenHash string) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error {
+	panic("not implemented")
+}
+func (f *metricsFakeRepository) InsertAPIKey(ctx context.Context, key *metadata.APIKey) error {
+	copyOfKey := *key
+	f.apiKeysByHash[key.TokenHash] = &copyOfKey
+	f.apiKeysByID[key.ID] = &copyOfKey
+	return nil
+}
+func (f *metricsFakeRepository) FindAPIKeyByTokenHash(ctx context.Context, tokenHash string) (*metadata.APIKey, error) {
+	key, exists := f.apiKeysByHash[tokenHash]
+	if !exists {
+		return nil, metadata.ErrAPIKeyNotFound
+	}
+	copyOfKey := *key
+	return &copyOfKey, nil
+}
+func (f *metricsFakeRepository) ListAPIKeys(ctx context.Context) ([]*metadata.APIKey, error) {
+	keys := make([]*metadata.APIKey, 0, len(f.apiKeysByID))
+	for _, key := range f.apiKeysByID {
+		copyOfKey := *key
+		keys = append(keys, &copyOfKey)
+	}
+	return keys, nil
+}
+func (f *metricsFakeRepository) TouchAPIKey(ctx context.Context, id string, now time.Time) error {
+	key, exists := f.apiKeysByID[id]
+	if !exists {
+		return nil
+	}
+	key.LastUsedAt = &now
+	if hashed, ok := f.apiKeysByHash[key.TokenHash]; ok {
+		hashed.LastUsedAt = &now
+	}
+	return nil
+}
+func (f *metricsFakeRepository) RevokeAPIKey(ctx context.Context, id string, now time.Time) error {
+	key, exists := f.apiKeysByID[id]
+	if !exists {
+		return nil
+	}
+	key.RevokedAt = &now
+	if hashed, ok := f.apiKeysByHash[key.TokenHash]; ok {
+		hashed.RevokedAt = &now
+	}
+	return nil
+}
+func (f *metricsFakeRepository) Close() error { panic("not implemented") }

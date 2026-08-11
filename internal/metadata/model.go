@@ -75,3 +75,24 @@ type AdminSession struct {
 func (s *AdminSession) IsExpired(now time.Time) bool {
 	return now.After(s.ExpiresAt)
 }
+
+// APIKey is one row of api_keys: a revocable, database-backed credential
+// for server-to-server access (see internal/admin.Service.CreateAPIKey),
+// replacing the old static METRICS_TOKEN environment variable. TokenHash
+// is the SHA-256 hash of the opaque key handed to the operator - the
+// plaintext key itself is never stored, only returned once at creation
+// time, the same reasoning as AdminSession.TokenHash.
+type APIKey struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	TokenHash  string     `json:"-"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+}
+
+// IsRevoked reports whether this key has been revoked and should no
+// longer authenticate requests.
+func (k *APIKey) IsRevoked() bool {
+	return k.RevokedAt != nil
+}

@@ -1,7 +1,7 @@
 // Package stats exposes a public, human/dashboard-friendly summary of CDN
 // usage at GET /api/v1/stats. It is intentionally separate from GET /metrics:
-// /metrics is the Prometheus scrape target (text exposition format, may be
-// token-gated per METRICS_TOKEN) while this endpoint returns plain JSON,
+// /metrics is the Prometheus scrape target (text exposition format, gated
+// by an admin session or API key) while this endpoint returns plain JSON,
 // stays open like /config, and mixes in current-state figures from the
 // metadata store that Prometheus counters alone can't provide (e.g. how many
 // files are active right now).

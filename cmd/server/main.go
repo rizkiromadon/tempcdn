@@ -178,7 +178,6 @@ func main() {
 		AdminHandler:      adminHandler,
 		AdminService:      adminService,
 		AllowedOrigin:     cfg.AllowedOrigin,
-		MetricsToken:      cfg.MetricsToken,
 		RequestLatency:    metrics.RequestLatency,
 	})
 

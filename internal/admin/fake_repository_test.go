@@ -16,9 +16,12 @@ type fakeRepository struct {
 	adminsByUsername map[string]*metadata.Admin
 	adminsByID       map[string]*metadata.Admin
 	sessionsByHash   map[string]*metadata.AdminSession
+	apiKeysByHash    map[string]*metadata.APIKey
+	apiKeysByID      map[string]*metadata.APIKey
 
 	insertAdminErr        error
 	insertAdminSessionErr error
+	insertAPIKeyErr       error
 }
 
 func newFakeRepository() *fakeRepository {
@@ -26,6 +29,8 @@ func newFakeRepository() *fakeRepository {
 		adminsByUsername: make(map[string]*metadata.Admin),
 		adminsByID:       make(map[string]*metadata.Admin),
 		sessionsByHash:   make(map[string]*metadata.AdminSession),
+		apiKeysByHash:    make(map[string]*metadata.APIKey),
+		apiKeysByID:      make(map[string]*metadata.APIKey),
 	}
 }
 
@@ -138,6 +143,58 @@ func (f *fakeRepository) DeleteExpiredAdminSessions(ctx context.Context, before 
 		if !session.ExpiresAt.After(before) {
 			delete(f.sessionsByHash, hash)
 		}
+	}
+	return nil
+}
+
+func (f *fakeRepository) InsertAPIKey(ctx context.Context, key *metadata.APIKey) error {
+	if f.insertAPIKeyErr != nil {
+		return f.insertAPIKeyErr
+	}
+	copyOfKey := *key
+	f.apiKeysByHash[key.TokenHash] = &copyOfKey
+	f.apiKeysByID[key.ID] = &copyOfKey
+	return nil
+}
+
+func (f *fakeRepository) FindAPIKeyByTokenHash(ctx context.Context, tokenHash string) (*metadata.APIKey, error) {
+	key, exists := f.apiKeysByHash[tokenHash]
+	if !exists {
+		return nil, metadata.ErrAPIKeyNotFound
+	}
+	copyOfKey := *key
+	return &copyOfKey, nil
+}
+
+func (f *fakeRepository) ListAPIKeys(ctx context.Context) ([]*metadata.APIKey, error) {
+	keys := make([]*metadata.APIKey, 0, len(f.apiKeysByID))
+	for _, key := range f.apiKeysByID {
+		copyOfKey := *key
+		keys = append(keys, &copyOfKey)
+	}
+	return keys, nil
+}
+
+func (f *fakeRepository) TouchAPIKey(ctx context.Context, id string, now time.Time) error {
+	key, exists := f.apiKeysByID[id]
+	if !exists {
+		return nil
+	}
+	key.LastUsedAt = &now
+	if hashed, ok := f.apiKeysByHash[key.TokenHash]; ok {
+		hashed.LastUsedAt = &now
+	}
+	return nil
+}
+
+func (f *fakeRepository) RevokeAPIKey(ctx context.Context, id string, now time.Time) error {
+	key, exists := f.apiKeysByID[id]
+	if !exists {
+		return nil
+	}
+	key.RevokedAt = &now
+	if hashed, ok := f.apiKeysByHash[key.TokenHash]; ok {
+		hashed.RevokedAt = &now
 	}
 	return nil
 }

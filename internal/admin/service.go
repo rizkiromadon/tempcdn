@@ -24,6 +24,8 @@ var ErrInvalidCredentials = errors.New("invalid username or password")
 
 var ErrSessionInvalid = errors.New("invalid or expired session")
 
+var ErrAPIKeyInvalid = errors.New("invalid or revoked api key")
+
 // minPasswordLength is enforced both when creating an admin at bootstrap
 // and (if ever exposed) via any future admin-management endpoint.
 const minPasswordLength = 12
@@ -170,6 +172,92 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 		return fmt.Errorf("delete admin session: %w", err)
 	}
 	return nil
+}
+
+// CreateAPIKeyResult carries the plaintext API key, which - like a
+// session token - exists only in memory for this one response and is
+// never stored; only its hash is persisted (see metadata.APIKey.TokenHash).
+type CreateAPIKeyResult struct {
+	Key    string
+	Record *metadata.APIKey
+}
+
+// CreateAPIKey generates a new API key, persists its hash, and returns the
+// plaintext key. The plaintext is shown to the caller exactly once, in
+// this response - it cannot be retrieved again afterward, only revoked and
+// replaced with a new key.
+func (s *Service) CreateAPIKey(ctx context.Context, name string) (*CreateAPIKeyResult, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("api key name must not be empty")
+	}
+
+	key, err := idgen.NewAPIKey()
+	if err != nil {
+		return nil, fmt.Errorf("generate api key: %w", err)
+	}
+
+	record := &metadata.APIKey{
+		ID:        idgen.NewAdminID(),
+		Name:      name,
+		TokenHash: idgen.HashAPIKey(key),
+		CreatedAt: s.now(),
+	}
+	if err := s.repository.InsertAPIKey(ctx, record); err != nil {
+		return nil, fmt.Errorf("persist api key: %w", err)
+	}
+
+	return &CreateAPIKeyResult{Key: key, Record: record}, nil
+}
+
+// ListAPIKeys returns every API key (active and revoked) for the admin
+// dashboard's key management view. Only metadata is returned - the
+// plaintext key itself is never retrievable after creation.
+func (s *Service) ListAPIKeys(ctx context.Context) ([]*metadata.APIKey, error) {
+	keys, err := s.repository.ListAPIKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list api keys: %w", err)
+	}
+	return keys, nil
+}
+
+// RevokeAPIKey revokes a single API key by ID. Idempotent: revoking an
+// already-revoked or nonexistent key is not an error.
+func (s *Service) RevokeAPIKey(ctx context.Context, id string) error {
+	if err := s.repository.RevokeAPIKey(ctx, id, s.now()); err != nil {
+		return fmt.Errorf("revoke api key: %w", err)
+	}
+	return nil
+}
+
+// VerifyAPIKey looks up an API key by its plaintext value, checking both
+// that it exists and that it hasn't been revoked, and refreshes
+// last_used_at on success. Used by the RequireAPIKeyOrAdminSession
+// middleware (or any caller gating server-to-server access, e.g.
+// /metrics) as an alternative to a logged-in admin session.
+func (s *Service) VerifyAPIKey(ctx context.Context, key string) (*metadata.APIKey, error) {
+	if key == "" {
+		return nil, ErrAPIKeyInvalid
+	}
+	tokenHash := idgen.HashAPIKey(key)
+
+	record, err := s.repository.FindAPIKeyByTokenHash(ctx, tokenHash)
+	if errors.Is(err, metadata.ErrAPIKeyNotFound) {
+		return nil, ErrAPIKeyInvalid
+	}
+	if err != nil {
+		return nil, fmt.Errorf("look up api key: %w", err)
+	}
+
+	if record.IsRevoked() {
+		return nil, ErrAPIKeyInvalid
+	}
+
+	if err := s.repository.TouchAPIKey(ctx, record.ID, s.now()); err != nil {
+		return nil, fmt.Errorf("touch api key: %w", err)
+	}
+
+	return record, nil
 }
 
 // dummyPasswordHash is a valid bcrypt hash of an arbitrary fixed string,

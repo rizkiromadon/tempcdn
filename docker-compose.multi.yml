@@ -60,7 +60,6 @@ services:
       # Must be identical across all instances - see comment above.
       IP_HASH_SALT: ${IP_HASH_SALT:-local-dev-salt}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:3000}
-      METRICS_TOKEN: ${METRICS_TOKEN}
       ALLOWED_MIME_TYPES: "image/*,video/*,application/pdf,application/zip,text/plain"
       BLOCKED_EXTENSIONS: ".exe,.bat,.sh,.msi,.dll,.scr"
     depends_on:

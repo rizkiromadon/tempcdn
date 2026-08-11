@@ -15,6 +15,8 @@ var (
 	ErrAdminSessionNotFound = errors.New("admin session not found")
 )
 
+var ErrAPIKeyNotFound = errors.New("api key not found")
+
 // errInvalidDSN is returned by NewRepository when DATABASE_DSN is not a
 // Postgres connection string. tempcdn requires Postgres for every
 // deployment (see NewRepository).
@@ -87,6 +89,27 @@ type Repository interface {
 	// DeleteExpiredAdminSessions removes sessions whose expires_at is at or
 	// before "before", keeping the table from growing unbounded.
 	DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error
+
+	// InsertAPIKey creates a new API key row.
+	InsertAPIKey(ctx context.Context, key *APIKey) error
+	// FindAPIKeyByTokenHash returns ErrAPIKeyNotFound if no key matches the
+	// given hash, regardless of whether it's revoked - callers (see
+	// internal/admin.Service.VerifyAPIKey) are responsible for checking
+	// APIKey.IsRevoked themselves, so a revoked-but-found key can still be
+	// distinguished from a truly unknown one (e.g. for clearer error
+	// logging), rather than both collapsing to the same not-found error.
+	FindAPIKeyByTokenHash(ctx context.Context, tokenHash string) (*APIKey, error)
+	// ListAPIKeys returns every API key (active and revoked), most
+	// recently created first, for the admin dashboard's key management
+	// view.
+	ListAPIKeys(ctx context.Context) ([]*APIKey, error)
+	// TouchAPIKey refreshes last_used_at on successful authentication.
+	TouchAPIKey(ctx context.Context, id string, now time.Time) error
+	// RevokeAPIKey stamps revoked_at on a key, idempotently: revoking an
+	// already-revoked or nonexistent key is not an error. Keys are never
+	// hard-deleted, so the admin dashboard retains a full history of keys
+	// that ever existed.
+	RevokeAPIKey(ctx context.Context, id string, now time.Time) error
 
 	Close() error
 }

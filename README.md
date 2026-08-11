@@ -23,6 +23,7 @@ core "temporary" guarantee.
   - [Health Check](#health-check)
   - [Metrics](#metrics)
   - [Admin Authentication](#admin-authentication)
+  - [API Keys](#api-keys)
   - [Config](#config)
   - [Stats](#stats)
   - [Node Status](#node-status)
@@ -123,7 +124,6 @@ for a ready-to-copy template.
 | `IP_HASH_SALT` | — | Salt used to hash the uploader's IP address before storing it. **Required** — the server refuses to start with the well-known default unless `ALLOW_INSECURE_IP_HASH_SALT=true` is also set (local development only). |
 | `ALLOW_INSECURE_IP_HASH_SALT` | `false` | Set to `true` to allow starting without a real `IP_HASH_SALT`. Never set this in production. |
 | `ALLOWED_ORIGIN` | — | Origin allowed to call this API from a browser. Required. |
-| `METRICS_TOKEN` | — | If set, required (as `X-Metrics-Token` header or `Authorization: Bearer`) to read `/metrics`, unless the caller instead sends a valid admin session token via the same headers (see [Admin Authentication](#admin-authentication)). CORS alone does not stop direct/server-to-server access, so this (or a valid admin session) is the actual access control; leave unset only if `/metrics` is not publicly reachable. |
 | `ADMIN_BOOTSTRAP_USERNAME` | — | Username for the first admin dashboard account, created on startup only if no admin account exists yet. Safe to leave set across restarts/redeploys — a no-op once an admin exists. |
 | `ADMIN_BOOTSTRAP_PASSWORD` | — | Password for the bootstrap admin account (min. 12 characters). If no admin account exists and this (and `ADMIN_BOOTSTRAP_USERNAME`) are unset, the server refuses to start. |
 | `ALLOWED_MIME_TYPES` | `image/*,video/*,application/pdf,application/zip,text/plain` | Comma-separated list of allowed MIME types/patterns. Supports `type/*` wildcards. |
@@ -166,17 +166,18 @@ Exposes Prometheus metrics (`tempcdn_uploads_total`,
 GET /metrics
 ```
 
-If `METRICS_TOKEN` is configured, requests must include valid credentials as
-either an `X-Metrics-Token` header or an `Authorization: Bearer <token>`
-header. The value can be **either**:
+Requests must include valid credentials as either an `X-Metrics-Token`
+header or an `Authorization: Bearer <token>` header. The value can be
+**either**:
 
-- the shared-secret `METRICS_TOKEN` itself, or
-- a valid admin session token obtained from `POST /api/v1/admin/login` (see
-  [Admin Authentication](#admin-authentication) below)
+- a valid admin session token obtained from `POST /api/v1/admin/login`
+  (see [Admin Authentication](#admin-authentication) below), or
+- a valid, non-revoked API key created from `POST /api/v1/admin/api-keys`
+  (see [API Keys](#api-keys) below)
 
-so existing Prometheus scrape configs that predate admin auth keep working
-unchanged, while new integrations can reuse an admin session instead of a
-separately-managed static token.
+There is no environment variable for this: API keys are database-backed
+and revocable from the admin dashboard, so a compromised or unused key can
+be revoked immediately without redeploying the server.
 
 ### Admin Authentication
 
@@ -259,6 +260,103 @@ unknown token still returns `200 OK`.
 
 ```json
 { "logged_out": true }
+```
+
+### API Keys
+
+Long-lived, revocable credentials for server-to-server access — currently
+used to gate `GET /metrics` (see [Metrics](#metrics)) — managed from the
+admin dashboard rather than a static environment variable. Like admin
+sessions, only a key's SHA-256 hash is ever stored; the plaintext key is
+shown exactly once, in the response to `POST /api/v1/admin/api-keys`, and
+can never be retrieved again afterward — only revoked and replaced with a
+new key. All endpoints below require a valid admin session
+(`Authorization: Bearer <session token>`, see
+[Authenticated requests](#authenticated-requests) above).
+
+#### Create a key
+
+```
+POST /api/v1/admin/api-keys
+Authorization: Bearer <session token>
+Content-Type: application/json
+
+{ "name": "prometheus-prod" }
+```
+
+`name` is a free-text label for identifying the key later in the dashboard
+(e.g. which scrape config or service it belongs to) — it has no bearing on
+what the key can access.
+
+**Response `201 Created`**
+
+```json
+{
+  "id": "b2b1...9e3c",
+  "name": "prometheus-prod",
+  "key": "tcdn_5f2c...e91a",
+  "created_at": "2026-08-11T09:00:00Z"
+}
+```
+
+The `key` field is only ever returned here. Store it immediately (e.g. in
+your Prometheus scrape config's `Authorization` header, or as
+`X-Metrics-Token`) — there is no way to view it again.
+
+**Response `400 Bad Request`** — `name` was empty.
+
+#### List keys
+
+```
+GET /api/v1/admin/api-keys
+Authorization: Bearer <session token>
+```
+
+Returns every key that has ever been created, active and revoked alike,
+most recently created first. The plaintext key is never included.
+
+**Response `200 OK`**
+
+```json
+[
+  {
+    "id": "b2b1...9e3c",
+    "name": "prometheus-prod",
+    "created_at": "2026-08-11T09:00:00Z",
+    "last_used_at": "2026-08-11T10:15:00Z"
+  },
+  {
+    "id": "a1c4...7d02",
+    "name": "old-monitoring-box",
+    "created_at": "2026-05-01T12:00:00Z",
+    "revoked_at": "2026-07-01T08:00:00Z"
+  }
+]
+```
+
+`last_used_at` is refreshed on every successful authentication with that
+key, so you can tell whether a key is actually still in use before
+revoking it. `revoked_at` is present once a key has been revoked;
+otherwise omitted.
+
+#### Revoke a key
+
+```
+DELETE /api/v1/admin/api-keys/{id}
+Authorization: Bearer <session token>
+```
+
+Revokes the key immediately — it can no longer authenticate, even before
+any notion of expiry, since API keys don't expire on their own. The row
+itself is kept (not deleted) so revoked keys still show up in the list
+above, preserving a record of what existed and when it was revoked.
+Idempotent: revoking an already-revoked or unknown ID still returns
+`200 OK`.
+
+**Response `200 OK`**
+
+```json
+{ "revoked": true }
 ```
 
 ### Config
@@ -553,7 +651,7 @@ All error responses share the same JSON shape:
   metadata is not sensitive and is commonly read from arbitrary front-end
   origins.
 - `GET /metrics` uses the strict, `ALLOWED_ORIGIN` CORS policy, plus an
-  optional `METRICS_TOKEN` check that isn't CORS-dependent (see
+  admin-session-or-API-key check that isn't CORS-dependent (see
   [Metrics](#metrics)) — CORS is a browser-enforced policy only and does
   nothing to stop direct/server-to-server requests.
 - `GET /api/v1/stats` uses the strict, `ALLOWED_ORIGIN` CORS policy, same as
@@ -658,10 +756,12 @@ In exchange:
   purges expired rows so the table doesn't grow unbounded from sessions
   that were never explicitly logged out.
 
-`/metrics` accepts an admin session token as an alternative to the legacy
-`METRICS_TOKEN` shared secret (see [Metrics](#metrics)) — both are checked
+`/metrics` accepts either an admin session token or a database-backed API
+key (see [Metrics](#metrics) and [API Keys](#api-keys)) — both are checked
 against the same `Authorization: Bearer` / `X-Metrics-Token` header, so a
-caller supplies whichever it has, not both.
+caller supplies whichever it has, not both. API keys follow the same
+hash-only storage and one-time-display model as session tokens, described
+above.
 
 ## Known Limitations
 

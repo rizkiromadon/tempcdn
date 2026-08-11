@@ -5,7 +5,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/tempcdn/tempcdn/internal/metadata"
 	"github.com/tempcdn/tempcdn/internal/response"
 )
 
@@ -89,6 +92,106 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]string{
 		"username": session.Admin.Username,
 	})
+}
+
+type createAPIKeyRequestBody struct {
+	Name string `json:"name"`
+}
+
+type createAPIKeyResponseBody struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Key       string `json:"key"`
+	CreatedAt string `json:"created_at"`
+}
+
+type apiKeyResponseBody struct {
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	CreatedAt  string  `json:"created_at"`
+	LastUsedAt *string `json:"last_used_at,omitempty"`
+	RevokedAt  *string `json:"revoked_at,omitempty"`
+}
+
+const apiTimeFormat = "2006-01-02T15:04:05Z07:00"
+
+// CreateAPIKey handles POST /api/v1/admin/api-keys. On success it returns
+// the plaintext key in the JSON body exactly once - like Login's session
+// token, this is the only time the plaintext is ever visible; only its
+// hash is persisted (see metadata.APIKey.TokenHash). Always behind
+// RequireAdminSession.
+func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
+	var body createAPIKeyRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		response.Error(w, http.StatusBadRequest, "name must not be empty")
+		return
+	}
+
+	result, err := h.service.CreateAPIKey(r.Context(), body.Name)
+	if err != nil {
+		h.logger.Error("admin_create_api_key_failed", "error", err)
+		response.Error(w, http.StatusInternalServerError, "failed to create api key")
+		return
+	}
+
+	response.JSON(w, http.StatusCreated, createAPIKeyResponseBody{
+		ID:        result.Record.ID,
+		Name:      result.Record.Name,
+		Key:       result.Key,
+		CreatedAt: result.Record.CreatedAt.Format(apiTimeFormat),
+	})
+}
+
+// ListAPIKeys handles GET /api/v1/admin/api-keys: returns every API key
+// (active and revoked) with metadata only - the plaintext key is never
+// retrievable after creation. Always behind RequireAdminSession.
+func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
+	keys, err := h.service.ListAPIKeys(r.Context())
+	if err != nil {
+		h.logger.Error("admin_list_api_keys_failed", "error", err)
+		response.Error(w, http.StatusInternalServerError, "failed to list api keys")
+		return
+	}
+
+	body := make([]apiKeyResponseBody, 0, len(keys))
+	for _, key := range keys {
+		body = append(body, toAPIKeyResponseBody(key))
+	}
+	response.JSON(w, http.StatusOK, body)
+}
+
+// RevokeAPIKey handles DELETE /api/v1/admin/api-keys/{id}. Idempotent:
+// revoking an already-revoked or nonexistent key still returns success.
+// Always behind RequireAdminSession.
+func (h *Handler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := h.service.RevokeAPIKey(r.Context(), id); err != nil {
+		h.logger.Error("admin_revoke_api_key_failed", "error", err)
+		response.Error(w, http.StatusInternalServerError, "failed to revoke api key")
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]bool{"revoked": true})
+}
+
+func toAPIKeyResponseBody(key *metadata.APIKey) apiKeyResponseBody {
+	body := apiKeyResponseBody{
+		ID:        key.ID,
+		Name:      key.Name,
+		CreatedAt: key.CreatedAt.Format(apiTimeFormat),
+	}
+	if key.LastUsedAt != nil {
+		formatted := key.LastUsedAt.Format(apiTimeFormat)
+		body.LastUsedAt = &formatted
+	}
+	if key.RevokedAt != nil {
+		formatted := key.RevokedAt.Format(apiTimeFormat)
+		body.RevokedAt = &formatted
+	}
+	return body
 }
 
 // extractBearerToken reads the session token from the Authorization
