@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"crypto/subtle"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/tempcdn/tempcdn/internal/admin"
 	"github.com/tempcdn/tempcdn/internal/file"
 	"github.com/tempcdn/tempcdn/internal/nodestatus"
 	"github.com/tempcdn/tempcdn/internal/response"
@@ -23,11 +25,15 @@ type RouterDependencies struct {
 	ConfigHandler     *upload.ConfigHandler
 	StatsHandler      *stats.Handler
 	NodeStatusHandler *nodestatus.Handler
+	AdminHandler      *admin.Handler
+	AdminService      *admin.Service
 	AllowedOrigin     string
-	// MetricsToken, if non-empty, is required as a Bearer token (or
-	// X-Metrics-Token header) on /metrics requests. CORS alone is a
-	// browser-enforced policy and does nothing to stop direct
-	// curl/server-to-server access, so this is the actual access control.
+	// MetricsToken, if non-empty, is accepted as a Bearer token (or
+	// X-Metrics-Token header) on /metrics requests, as an alternative to a
+	// logged-in admin session - kept for existing Prometheus scrape
+	// configs that predate admin auth. CORS alone is a browser-enforced
+	// policy and does nothing to stop direct curl/server-to-server access,
+	// so this (or a valid admin session) is the actual access control.
 	MetricsToken   string
 	RequestLatency *prometheus.HistogramVec
 }
@@ -56,7 +62,7 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	// 200 instead of a 405.
 	router.With(healthCORS).Head("/healthz", handleHealthCheckHead)
 	router.Options("/healthz", healthCORS(noop).ServeHTTP)
-	router.With(metricsCORS, metricsAuth(deps.MetricsToken)).Handle("/metrics", promhttp.Handler())
+	router.With(metricsCORS, metricsAuth(deps.MetricsToken, deps.AdminService, deps.Logger)).Handle("/metrics", promhttp.Handler())
 	router.Options("/metrics", metricsCORS(noop).ServeHTTP)
 
 	router.Route("/api/v1", func(apiRouter chi.Router) {
@@ -96,6 +102,21 @@ func NewRouter(deps RouterDependencies) http.Handler {
 		// token-gated /metrics policy.
 		apiRouter.With(getCORS).Get("/nodes", deps.NodeStatusHandler.ServeHTTP)
 		apiRouter.Options("/nodes", getCORS(noop).ServeHTTP)
+
+		adminCORS := CORS(deps.AllowedOrigin, "GET, POST, OPTIONS")
+		apiRouter.Route("/admin", func(adminRouter chi.Router) {
+			// /admin/login is intentionally not behind
+			// admin.RequireAdminSession - it's how a session is obtained in
+			// the first place.
+			adminRouter.With(adminCORS).Post("/login", deps.AdminHandler.Login)
+			adminRouter.Options("/login", adminCORS(noop).ServeHTTP)
+
+			adminRouter.With(adminCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Post("/logout", deps.AdminHandler.Logout)
+			adminRouter.Options("/logout", adminCORS(noop).ServeHTTP)
+
+			adminRouter.With(adminCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Get("/me", deps.AdminHandler.Me)
+			adminRouter.Options("/me", adminCORS(noop).ServeHTTP)
+		})
 	})
 
 	return router
@@ -134,28 +155,57 @@ func filePreflightCORS(getCORS, deleteCORS func(http.Handler) http.Handler, next
 	})
 }
 
-// metricsAuth requires a shared-secret token on /metrics, since CORS is a
+// metricsAuth requires either a valid admin session or the legacy
+// shared-secret METRICS_TOKEN on /metrics, since CORS is a
 // browser-enforced policy only and does nothing to stop direct
-// curl/server-to-server access. If token is empty, metrics stay open (e.g.
-// for local development or when scraping happens over a trusted internal
-// network) - operators exposing this port publicly should set one.
-func metricsAuth(token string) func(http.Handler) http.Handler {
+// curl/server-to-server access. The admin session check runs first since
+// it's the primary mechanism going forward; METRICS_TOKEN is accepted
+// alongside it purely for existing Prometheus scrape configs that predate
+// admin auth and can't easily be reconfigured to log in. Admin auth is
+// always available once the server has an admin service configured, but
+// metrics access itself only becomes gated once an operator opts in by
+// setting METRICS_TOKEN - this preserves the pre-admin-auth default of
+// open /metrics (e.g. local development, or scraping over a trusted
+// internal network) rather than silently starting to require login on
+// every existing deployment the moment this code ships.
+func metricsAuth(token string, adminService *admin.Service, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if token == "" {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			provided := r.Header.Get("X-Metrics-Token")
-			if provided == "" {
-				if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-					provided = strings.TrimPrefix(auth, "Bearer ")
+			bearerToken := extractBearerOrHeaderToken(r)
+
+			if adminService != nil {
+				if _, err := adminService.VerifySession(r.Context(), bearerToken); err == nil {
+					next.ServeHTTP(w, r)
+					return
+				} else if !errors.Is(err, admin.ErrSessionInvalid) {
+					logger.Error("metrics_admin_session_verify_failed", "error", err)
 				}
 			}
-			if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
-				response.Error(w, http.StatusUnauthorized, "missing or invalid metrics token")
+
+			if token != "" && subtle.ConstantTimeCompare([]byte(bearerToken), []byte(token)) == 1 {
+				next.ServeHTTP(w, r)
 				return
 			}
-			next.ServeHTTP(w, r)
+
+			response.Error(w, http.StatusUnauthorized, "missing or invalid metrics credentials")
 		})
 	}
+}
+
+// extractBearerOrHeaderToken reads a token from the X-Metrics-Token
+// header, falling back to a Bearer Authorization header. The same
+// plaintext value is tried both as an admin session token and (in
+// metricsAuth) as the legacy METRICS_TOKEN, since a caller supplies one
+// or the other, not both.
+func extractBearerOrHeaderToken(r *http.Request) string {
+	if provided := r.Header.Get("X-Metrics-Token"); provided != "" {
+		return provided
+	}
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	return ""
 }

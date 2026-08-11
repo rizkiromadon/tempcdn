@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tempcdn/tempcdn/internal/admin"
 	"github.com/tempcdn/tempcdn/internal/cloudflare"
 	"github.com/tempcdn/tempcdn/internal/config"
 	"github.com/tempcdn/tempcdn/internal/file"
@@ -51,6 +52,23 @@ func main() {
 		log.Error("failed to run metadata migrations", "error", err)
 		os.Exit(1)
 	}
+
+	// Seeds the first admin account if none exists yet. No-op on every boot
+	// after the first, so ADMIN_BOOTSTRAP_USERNAME/PASSWORD are safe to
+	// leave set across restarts/redeploys.
+	if err := admin.Bootstrap(rootCtx, repository, admin.BootstrapConfig{
+		Username: cfg.AdminBootstrapUsername,
+		Password: cfg.AdminBootstrapPassword,
+	}); err != nil {
+		log.Error("failed to bootstrap admin account", "error", err)
+		os.Exit(1)
+	}
+
+	adminService := admin.NewService(repository)
+	adminHandler := admin.NewHandler(adminService, log)
+
+	adminSessionJanitor := admin.NewSessionJanitor(repository, log)
+	go adminSessionJanitor.Run(rootCtx)
 
 	objectStorage, err := storage.NewR2Client(rootCtx, storage.R2ClientConfig{
 		AccessKeyID:     cfg.R2AccessKeyID,
@@ -157,6 +175,8 @@ func main() {
 		ConfigHandler:     configHandler,
 		StatsHandler:      statsHandler,
 		NodeStatusHandler: nodeStatusHandler,
+		AdminHandler:      adminHandler,
+		AdminService:      adminService,
 		AllowedOrigin:     cfg.AllowedOrigin,
 		MetricsToken:      cfg.MetricsToken,
 		RequestLatency:    metrics.RequestLatency,

@@ -46,3 +46,32 @@ type NodeStatus struct {
 	LastHeartbeatAt time.Time  `json:"last_heartbeat_at"`
 	MarkedOfflineAt *time.Time `json:"marked_offline_at,omitempty"`
 }
+
+// Admin is one row of admins: an account that can authenticate to the
+// admin dashboard API (see internal/admin.Service). PasswordHash is a
+// bcrypt hash - the plaintext password is never stored and never
+// serialized.
+type Admin struct {
+	ID           string     `json:"id"`
+	Username     string     `json:"username"`
+	PasswordHash string     `json:"-"`
+	CreatedAt    time.Time  `json:"created_at"`
+	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+}
+
+// AdminSession is one row of admin_sessions: a server-side, revocable
+// session created on successful login (see internal/admin.Service.Login).
+// TokenHash is the SHA-256 hash of the opaque token handed to the client -
+// the plaintext token itself is never stored, only returned once at login
+// time, the same reasoning as FileRecord.DeleteTokenHash.
+type AdminSession struct {
+	TokenHash  string    `json:"-"`
+	AdminID    string    `json:"admin_id"`
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	LastUsedAt time.Time `json:"last_used_at"`
+}
+
+func (s *AdminSession) IsExpired(now time.Time) bool {
+	return now.After(s.ExpiresAt)
+}

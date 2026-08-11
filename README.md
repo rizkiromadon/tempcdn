@@ -22,7 +22,10 @@ core "temporary" guarantee.
 - [API Reference](#api-reference)
   - [Health Check](#health-check)
   - [Metrics](#metrics)
+  - [Admin Authentication](#admin-authentication)
+  - [Config](#config)
   - [Stats](#stats)
+  - [Node Status](#node-status)
   - [Upload a File](#upload-a-file)
   - [Get File Info](#get-file-info)
   - [Delete a File](#delete-a-file)
@@ -31,6 +34,7 @@ core "temporary" guarantee.
   - [Rate limiting strategy](#rate-limiting-strategy)
   - [Streaming checksum vs. single-read upload](#streaming-checksum-vs-single-read-upload)
   - [Expiry enforcement](#expiry-enforcement)
+  - [Admin auth: opaque sessions, not JWTs](#admin-auth-opaque-sessions-not-jwts)
 - [Known Limitations](#known-limitations)
 
 ## Features
@@ -119,7 +123,9 @@ for a ready-to-copy template.
 | `IP_HASH_SALT` | — | Salt used to hash the uploader's IP address before storing it. **Required** — the server refuses to start with the well-known default unless `ALLOW_INSECURE_IP_HASH_SALT=true` is also set (local development only). |
 | `ALLOW_INSECURE_IP_HASH_SALT` | `false` | Set to `true` to allow starting without a real `IP_HASH_SALT`. Never set this in production. |
 | `ALLOWED_ORIGIN` | — | Origin allowed to call this API from a browser. Required. |
-| `METRICS_TOKEN` | — | If set, required (as `X-Metrics-Token` header or `Authorization: Bearer`) to read `/metrics`. CORS alone does not stop direct/server-to-server access, so this is the actual access control; leave unset only if `/metrics` is not publicly reachable. |
+| `METRICS_TOKEN` | — | If set, required (as `X-Metrics-Token` header or `Authorization: Bearer`) to read `/metrics`, unless the caller instead sends a valid admin session token via the same headers (see [Admin Authentication](#admin-authentication)). CORS alone does not stop direct/server-to-server access, so this (or a valid admin session) is the actual access control; leave unset only if `/metrics` is not publicly reachable. |
+| `ADMIN_BOOTSTRAP_USERNAME` | — | Username for the first admin dashboard account, created on startup only if no admin account exists yet. Safe to leave set across restarts/redeploys — a no-op once an admin exists. |
+| `ADMIN_BOOTSTRAP_PASSWORD` | — | Password for the bootstrap admin account (min. 12 characters). If no admin account exists and this (and `ADMIN_BOOTSTRAP_USERNAME`) are unset, the server refuses to start. |
 | `ALLOWED_MIME_TYPES` | `image/*,video/*,application/pdf,application/zip,text/plain` | Comma-separated list of allowed MIME types/patterns. Supports `type/*` wildcards. |
 | `BLOCKED_EXTENSIONS` | `.exe,.bat,.sh,.msi,.dll,.scr` | Comma-separated list of blocked file extensions. Matched both as the file's final extension and as a substring earlier in the filename (e.g. `evil.exe.png` is also blocked). |
 | `NODE_ID` | random `hostname-xxxx` | This instance's identifier in the node liveness table (`GET /api/v1/nodes`). Set explicitly (e.g. `srv1`, `srv2`) when running multiple instances, for stable/readable rows across restarts. |
@@ -160,8 +166,128 @@ Exposes Prometheus metrics (`tempcdn_uploads_total`,
 GET /metrics
 ```
 
-If `METRICS_TOKEN` is configured, requests must include it as either an
-`X-Metrics-Token` header or an `Authorization: Bearer <token>` header.
+If `METRICS_TOKEN` is configured, requests must include valid credentials as
+either an `X-Metrics-Token` header or an `Authorization: Bearer <token>`
+header. The value can be **either**:
+
+- the shared-secret `METRICS_TOKEN` itself, or
+- a valid admin session token obtained from `POST /api/v1/admin/login` (see
+  [Admin Authentication](#admin-authentication) below)
+
+so existing Prometheus scrape configs that predate admin auth keep working
+unchanged, while new integrations can reuse an admin session instead of a
+separately-managed static token.
+
+### Admin Authentication
+
+Username/password login for the admin dashboard API, backed by
+server-side, revocable sessions (database rows, not JWTs) — see
+[Design Notes](#design-notes) for why.
+
+The first admin account is created automatically on startup from
+`ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD`, **only if no admin
+account exists yet**. It's safe to leave both set across restarts and
+redeploys: every boot after the first is a no-op here. If no admin account
+exists and these are unset, the server refuses to start.
+
+#### Log in
+
+```
+POST /api/v1/admin/login
+Content-Type: application/json
+
+{ "username": "admin", "password": "..." }
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "token": "5f2c...e91a",
+  "username": "admin",
+  "expires_at": "2026-08-12T09:00:00Z"
+}
+```
+
+**Response `401 Unauthorized`** — invalid username or password. The error
+message is identical for "no such user" and "wrong password", so the
+endpoint can't be used to enumerate valid usernames.
+
+Sessions expire 24 hours after login (or after last use — see below); after
+that, log in again to get a new token. There is no separate refresh-token
+flow, since sessions are cheap, revocable rows rather than long-lived JWTs.
+
+#### Authenticated requests
+
+Send the token from `login` as a Bearer token on every subsequent admin
+request:
+
+```
+Authorization: Bearer 5f2c...e91a
+```
+
+Every authenticated request also refreshes the session's "last used"
+timestamp.
+
+#### Check current session
+
+```
+GET /api/v1/admin/me
+Authorization: Bearer <token>
+```
+
+**Response `200 OK`**
+
+```json
+{ "username": "admin" }
+```
+
+**Response `401 Unauthorized`** — missing, invalid, or expired token.
+
+#### Log out
+
+```
+POST /api/v1/admin/logout
+Authorization: Bearer <token>
+```
+
+Revokes the session immediately (the token can't be used again, even
+before its 24-hour expiry). Idempotent — logging out an already-invalid or
+unknown token still returns `200 OK`.
+
+**Response `200 OK`**
+
+```json
+{ "logged_out": true }
+```
+
+### Config
+
+Returns the server's current upload constraints, so a client can validate a
+file locally (size, MIME type) before attempting an upload rather than
+discovering a rejection only after sending the bytes. Always public, like
+`/stats`.
+
+```
+GET /api/v1/config
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "max_upload_size_bytes": 104857600,
+  "max_upload_size_mb": 100,
+  "allowed_mime_types": ["image/*", "video/*", "application/pdf", "application/zip", "text/plain"],
+  "blocked_extensions": [".exe", ".bat", ".sh", ".msi", ".dll", ".scr"],
+  "file_ttl_hours": 24
+}
+```
+
+These values mirror `SERVER_MAX_UPLOAD_MB`, `ALLOWED_MIME_TYPES`,
+`BLOCKED_EXTENSIONS`, and `FILE_TTL_HOURS` (see [Configuration](#configuration))
+— this endpoint exists so a client doesn't need those environment variables
+hardcoded or duplicated on its own side.
 
 ### Stats
 
@@ -197,6 +323,58 @@ GET /api/v1/stats
   `tempcdn_upload_errors_total`). They only increase — they are **not**
   reduced when files expire or are deleted — and reset to `0` on process
   restart, since they aren't persisted independently of the metadata store.
+
+### Node Status
+
+Returns a read-only liveness view of every tempcdn instance sharing this
+deployment's database (see [Running Multiple Instances](#running-multiple-instances)).
+Public, like `/config` and `/stats` — operational visibility, not sensitive
+per-file data.
+
+```
+GET /api/v1/nodes
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "nodes": [
+    {
+      "node_id": "srv1",
+      "hostname": "srv1.internal",
+      "status": "online",
+      "started_at": "2026-08-09T00:00:00Z",
+      "last_heartbeat_at": "2026-08-11T09:00:12Z",
+      "seconds_since_heartbeat": 3.4
+    },
+    {
+      "node_id": "srv2",
+      "hostname": "srv2.internal",
+      "status": "offline",
+      "started_at": "2026-08-08T00:00:00Z",
+      "last_heartbeat_at": "2026-08-10T22:14:01Z",
+      "marked_offline_at": "2026-08-10T22:15:00Z",
+      "seconds_since_heartbeat": 39251.9
+    }
+  ],
+  "generated_at": "2026-08-11T09:00:15Z"
+}
+```
+
+- A single standalone instance still reports its own row here — it just
+  never sees any peers.
+- `status` is only ever `"online"` or `"offline"`. A node never marks
+  itself offline (a crashed or powered-off process can't run that code);
+  instead, any other still-live instance's background janitor flips a row
+  to `"offline"` once its `last_heartbeat_at` goes stale
+  (`NODE_STALE_AFTER_SECONDS`, see [Configuration](#configuration)), and
+  stamps `marked_offline_at` at that moment.
+- `seconds_since_heartbeat` is computed at response time from the server's
+  own clock, so a polling client doesn't need its clock synced with the
+  server's to tell how stale a node's heartbeat currently is.
+- A node that comes back online after being flagged offline reclaims
+  `"online"` status the moment it heartbeats again.
 
 ### Upload a File
 
@@ -457,6 +635,33 @@ longer than necessary. An R2 Lifecycle Rule configured on the bucket
 directly is a reasonable defense-in-depth addition on top of this, but the
 application does not depend on one being configured correctly — the sweeper
 is the actual, verifiable enforcement mechanism.
+
+### Admin auth: opaque sessions, not JWTs
+
+`POST /api/v1/admin/login` returns an opaque, random 256-bit token, not a
+JWT. Only the token's SHA-256 hash is ever persisted (`admin_sessions.token_hash`)
+— the same pattern already used for file delete tokens
+(`files.delete_token_hash`) — so a database read or leak alone can't be
+replayed as a valid session.
+
+The deliberate tradeoff versus a stateless JWT is that every authenticated
+request costs one extra database lookup (`FindAdminSessionByTokenHash`).
+In exchange:
+
+- **Sessions are individually revocable.** `POST /api/v1/admin/logout`
+  deletes exactly one row, and the token is invalid on the very next
+  request — no waiting out a JWT's expiry window.
+- **No signing key to manage or rotate.** A leaked JWT signing key
+  compromises every session past and future until rotated; there is no
+  equivalent single point of failure here.
+- A background janitor (`internal/admin.SessionJanitor`) periodically
+  purges expired rows so the table doesn't grow unbounded from sessions
+  that were never explicitly logged out.
+
+`/metrics` accepts an admin session token as an alternative to the legacy
+`METRICS_TOKEN` shared secret (see [Metrics](#metrics)) — both are checked
+against the same `Authorization: Bearer` / `X-Metrics-Token` header, so a
+caller supplies whichever it has, not both.
 
 ## Known Limitations
 

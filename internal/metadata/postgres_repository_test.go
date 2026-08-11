@@ -9,6 +9,26 @@ import (
 	"time"
 )
 
+// sampleRecord builds a minimal, valid *FileRecord for tests that only
+// care about expiry/ID/checksum behavior (e.g. FindExpired), filling every
+// other field with an arbitrary-but-valid placeholder so Insert succeeds
+// against the real files table's NOT NULL constraints.
+func sampleRecord(id, checksum string, createdAt time.Time, ttl time.Duration) *FileRecord {
+	return &FileRecord{
+		ID:              id,
+		OriginalName:    "test-file.bin",
+		ContentType:     "application/octet-stream",
+		SizeBytes:       1024,
+		ChecksumSHA256:  checksum,
+		ObjectKey:       "test/" + id,
+		CDNURL:          "https://cdn.example.com/test/" + id,
+		UploaderIPHash:  "test-ip-hash",
+		DeleteTokenHash: "test-delete-token-hash-" + id,
+		CreatedAt:       createdAt,
+		ExpiresAt:       createdAt.Add(ttl),
+	}
+}
+
 // newTestPostgresRepository connects to TEST_POSTGRES_DSN and returns a
 // PostgresRepository with a clean "files" table, or skips the test if
 // TEST_POSTGRES_DSN is unset. This keeps `go test ./...` green in

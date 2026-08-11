@@ -9,6 +9,12 @@ import (
 
 var ErrFileNotFound = errors.New("file record not found")
 
+var (
+	ErrAdminNotFound        = errors.New("admin not found")
+	ErrAdminUsernameTaken   = errors.New("admin username already taken")
+	ErrAdminSessionNotFound = errors.New("admin session not found")
+)
+
 // errInvalidDSN is returned by NewRepository when DATABASE_DSN is not a
 // Postgres connection string. tempcdn requires Postgres for every
 // deployment (see NewRepository).
@@ -50,6 +56,37 @@ type Repository interface {
 	// ListNodeStatus returns every known node's row, most recently
 	// heartbeated first, for the GET /api/v1/nodes endpoint.
 	ListNodeStatus(ctx context.Context) ([]*NodeStatus, error)
+
+	// InsertAdmin creates a new admin account. Returns ErrAdminUsernameTaken
+	// if the username is already in use.
+	InsertAdmin(ctx context.Context, admin *Admin) error
+	// FindAdminByUsername returns ErrAdminNotFound if no admin has that
+	// username.
+	FindAdminByUsername(ctx context.Context, username string) (*Admin, error)
+	// FindAdminByID returns ErrAdminNotFound if no admin has that id.
+	FindAdminByID(ctx context.Context, id string) (*Admin, error)
+	// CountAdmins is used at startup to decide whether to seed a bootstrap
+	// admin account (see internal/admin.Bootstrap).
+	CountAdmins(ctx context.Context) (int64, error)
+	// TouchAdminLastLogin stamps last_login_at on successful authentication.
+	TouchAdminLastLogin(ctx context.Context, adminID string, now time.Time) error
+
+	// InsertAdminSession creates a new session row on successful login.
+	InsertAdminSession(ctx context.Context, session *AdminSession) error
+	// FindAdminSessionByTokenHash returns ErrAdminSessionNotFound if no
+	// session matches (including if it previously existed but was deleted
+	// by DeleteAdminSession).
+	FindAdminSessionByTokenHash(ctx context.Context, tokenHash string) (*AdminSession, error)
+	// TouchAdminSession refreshes last_used_at on an authenticated request,
+	// for visibility into recent session activity.
+	TouchAdminSession(ctx context.Context, tokenHash string, now time.Time) error
+	// DeleteAdminSession revokes a single session (logout). Deleting an
+	// already-gone or nonexistent session is treated as success, not an
+	// error - logout is idempotent.
+	DeleteAdminSession(ctx context.Context, tokenHash string) error
+	// DeleteExpiredAdminSessions removes sessions whose expires_at is at or
+	// before "before", keeping the table from growing unbounded.
+	DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error
 
 	Close() error
 }

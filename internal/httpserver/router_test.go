@@ -186,3 +186,93 @@ func TestHealthzGetStillReturnsBody(t *testing.T) {
 		t.Errorf("expected health check body, got %q", got)
 	}
 }
+
+// TestMetricsOpenWhenNoTokenConfigured guards the pre-admin-auth default:
+// deployments that never set METRICS_TOKEN (e.g. local development, or
+// scraping over a trusted internal network) must keep working exactly as
+// before, with no login required, even though an AdminService now always
+// exists in a real deployment.
+func TestMetricsOpenWhenNoTokenConfigured(t *testing.T) {
+	router := NewRouter(RouterDependencies{
+		Logger:        testLogger(),
+		AllowedOrigin: "https://app.example.com",
+		// MetricsToken intentionally left empty; AdminService intentionally nil,
+		// mirroring a router constructed before admin auth existed.
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for GET /metrics with no token configured, got %d", rec.Code)
+	}
+}
+
+// TestMetricsRejectsRequestWithNoCredentialsWhenTokenConfigured guards the
+// existing token-gating behavior: once an operator sets METRICS_TOKEN, an
+// unauthenticated request must be rejected.
+func TestMetricsRejectsRequestWithNoCredentialsWhenTokenConfigured(t *testing.T) {
+	router := NewRouter(RouterDependencies{
+		Logger:        testLogger(),
+		AllowedOrigin: "https://app.example.com",
+		MetricsToken:  "shared-secret",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for GET /metrics with no credentials, got %d", rec.Code)
+	}
+}
+
+// TestMetricsAcceptsValidLegacyToken guards backward compatibility for
+// existing Prometheus scrape configs that predate admin auth: the
+// METRICS_TOKEN path must keep working exactly as before, whether sent as
+// X-Metrics-Token or as a Bearer Authorization header.
+func TestMetricsAcceptsValidLegacyToken(t *testing.T) {
+	router := NewRouter(RouterDependencies{
+		Logger:        testLogger(),
+		AllowedOrigin: "https://app.example.com",
+		MetricsToken:  "shared-secret",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("X-Metrics-Token", "shared-secret")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for GET /metrics with valid X-Metrics-Token, got %d", rec.Code)
+	}
+
+	reqBearer := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	reqBearer.Header.Set("Authorization", "Bearer shared-secret")
+	recBearer := httptest.NewRecorder()
+	router.ServeHTTP(recBearer, reqBearer)
+
+	if recBearer.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for GET /metrics with valid Bearer token, got %d", recBearer.Code)
+	}
+}
+
+// TestMetricsRejectsInvalidLegacyToken guards against a wrong/garbage
+// token being accepted just because METRICS_TOKEN is configured.
+func TestMetricsRejectsInvalidLegacyToken(t *testing.T) {
+	router := NewRouter(RouterDependencies{
+		Logger:        testLogger(),
+		AllowedOrigin: "https://app.example.com",
+		MetricsToken:  "shared-secret",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("X-Metrics-Token", "wrong-token")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for GET /metrics with invalid token, got %d", rec.Code)
+	}
+}

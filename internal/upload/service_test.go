@@ -95,6 +95,30 @@ func (m *mockRepository) MarkStaleOffline(ctx context.Context, before, now time.
 func (m *mockRepository) ListNodeStatus(ctx context.Context) ([]*metadata.NodeStatus, error) {
 	return nil, nil
 }
+func (m *mockRepository) InsertAdmin(ctx context.Context, admin *metadata.Admin) error { return nil }
+func (m *mockRepository) FindAdminByUsername(ctx context.Context, username string) (*metadata.Admin, error) {
+	return nil, metadata.ErrAdminNotFound
+}
+func (m *mockRepository) FindAdminByID(ctx context.Context, id string) (*metadata.Admin, error) {
+	return nil, metadata.ErrAdminNotFound
+}
+func (m *mockRepository) CountAdmins(ctx context.Context) (int64, error) { return 0, nil }
+func (m *mockRepository) TouchAdminLastLogin(ctx context.Context, adminID string, now time.Time) error {
+	return nil
+}
+func (m *mockRepository) InsertAdminSession(ctx context.Context, session *metadata.AdminSession) error {
+	return nil
+}
+func (m *mockRepository) FindAdminSessionByTokenHash(ctx context.Context, tokenHash string) (*metadata.AdminSession, error) {
+	return nil, metadata.ErrAdminSessionNotFound
+}
+func (m *mockRepository) TouchAdminSession(ctx context.Context, tokenHash string, now time.Time) error {
+	return nil
+}
+func (m *mockRepository) DeleteAdminSession(ctx context.Context, tokenHash string) error { return nil }
+func (m *mockRepository) DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error {
+	return nil
+}
 func (m *mockRepository) Close() error { return nil }
 
 func TestUploadServiceFirstUploadStoresObjectAndMetadata(t *testing.T) {

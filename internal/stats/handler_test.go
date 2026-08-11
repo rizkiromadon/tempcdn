@@ -48,6 +48,36 @@ func (f *fakeRepository) MarkStaleOffline(ctx context.Context, before, now time.
 func (f *fakeRepository) ListNodeStatus(ctx context.Context) ([]*metadata.NodeStatus, error) {
 	panic("not implemented")
 }
+func (f *fakeRepository) InsertAdmin(ctx context.Context, admin *metadata.Admin) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) FindAdminByUsername(ctx context.Context, username string) (*metadata.Admin, error) {
+	panic("not implemented")
+}
+func (f *fakeRepository) FindAdminByID(ctx context.Context, id string) (*metadata.Admin, error) {
+	panic("not implemented")
+}
+func (f *fakeRepository) CountAdmins(ctx context.Context) (int64, error) {
+	panic("not implemented")
+}
+func (f *fakeRepository) TouchAdminLastLogin(ctx context.Context, adminID string, now time.Time) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) InsertAdminSession(ctx context.Context, session *metadata.AdminSession) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) FindAdminSessionByTokenHash(ctx context.Context, tokenHash string) (*metadata.AdminSession, error) {
+	panic("not implemented")
+}
+func (f *fakeRepository) TouchAdminSession(ctx context.Context, tokenHash string, now time.Time) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) DeleteAdminSession(ctx context.Context, tokenHash string) error {
+	panic("not implemented")
+}
+func (f *fakeRepository) DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error {
+	panic("not implemented")
+}
 func (f *fakeRepository) Close() error { panic("not implemented") }
 
 func newTestCounters() (uploads, bytesTotal, errorsTotal prometheus.Counter) {

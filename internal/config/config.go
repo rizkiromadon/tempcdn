@@ -53,6 +53,12 @@ type Config struct {
 
 	MetricsToken string
 
+	// AdminBootstrapUsername/Password seed the first admin account on
+	// startup, only if no admin account already exists (see
+	// internal/admin.Bootstrap). Safe to leave set across restarts/redeploys.
+	AdminBootstrapUsername string
+	AdminBootstrapPassword string
+
 	AllowedMimeTypes  []string
 	BlockedExtensions []string
 
@@ -74,6 +80,9 @@ func Load() (*Config, error) {
 		AllowedOrigin:     os.Getenv("ALLOWED_ORIGIN"),
 		MetricsToken:      os.Getenv("METRICS_TOKEN"),
 		NodeID:            os.Getenv("NODE_ID"),
+
+		AdminBootstrapUsername: os.Getenv("ADMIN_BOOTSTRAP_USERNAME"),
+		AdminBootstrapPassword: os.Getenv("ADMIN_BOOTSTRAP_PASSWORD"),
 
 		CloudflareZoneID:   os.Getenv("CLOUDFLARE_ZONE_ID"),
 		CloudflareAPIToken: os.Getenv("CLOUDFLARE_API_TOKEN"),
