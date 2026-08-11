@@ -18,7 +18,6 @@ type R2Client struct {
 }
 
 type R2ClientConfig struct {
-	AccountID       string
 	AccessKeyID     string
 	SecretAccessKey string
 	BucketName      string

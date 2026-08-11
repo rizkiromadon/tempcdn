@@ -159,4 +159,3 @@ func metricsAuth(token string) func(http.Handler) http.Handler {
 		})
 	}
 }
-

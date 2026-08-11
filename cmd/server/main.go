@@ -53,7 +53,6 @@ func main() {
 	}
 
 	objectStorage, err := storage.NewR2Client(rootCtx, storage.R2ClientConfig{
-		AccountID:       cfg.R2AccountID,
 		AccessKeyID:     cfg.R2AccessKeyID,
 		SecretAccessKey: cfg.R2SecretAccessKey,
 		BucketName:      cfg.R2BucketName,

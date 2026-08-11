@@ -17,7 +17,6 @@ type Config struct {
 	ServerPort        string
 	ServerMaxUploadMB int64
 
-	R2AccountID       string
 	R2AccessKeyID     string
 	R2SecretAccessKey string
 	R2BucketName      string
@@ -65,8 +64,7 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		ServerPort:        getEnvOrDefault("SERVER_PORT", "8080"),
-		DatabaseDSN:       getEnvOrDefault("DATABASE_DSN", "file:tempcdn.db?cache=shared&_fk=1&_journal_mode=WAL&_busy_timeout=5000"),
-		R2AccountID:       os.Getenv("R2_ACCOUNT_ID"),
+		DatabaseDSN:       os.Getenv("DATABASE_DSN"),
 		R2AccessKeyID:     os.Getenv("R2_ACCESS_KEY_ID"),
 		R2SecretAccessKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
 		R2BucketName:      getEnvOrDefault("R2_BUCKET_NAME", "tempcdn-files"),

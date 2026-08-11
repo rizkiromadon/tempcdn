@@ -106,7 +106,6 @@ for a ready-to-copy template.
 |---|---|---|
 | `SERVER_PORT` | `8080` | Port the HTTP server listens on. |
 | `SERVER_MAX_UPLOAD_MB` | `100` | Maximum allowed upload size, in megabytes. |
-| `R2_ACCOUNT_ID` | — | Cloudflare account ID. |
 | `R2_ACCESS_KEY_ID` | — | R2 S3-compatible access key ID. Required. |
 | `R2_SECRET_ACCESS_KEY` | — | R2 S3-compatible secret access key. Required. |
 | `R2_BUCKET_NAME` | `tempcdn-files` | Target R2 bucket name. |
