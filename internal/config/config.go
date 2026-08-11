@@ -25,6 +25,7 @@ type Config struct {
 	R2PublicBaseURL   string
 
 	DatabaseDSN           string
+	DatabaseMaxConns      int32
 	FileTTLHours          int
 	FileSweepIntervalMins int
 
@@ -91,6 +92,21 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.ServerMaxUploadMB = int64(maxUploadMB)
+
+	// DATABASE_MAX_CONNS caps the Postgres connection pool per instance.
+	// Kept small by default (5) since managed Postgres providers (e.g.
+	// Aiven's smaller tiers) often reserve only a handful of non-superuser
+	// connection slots; exceeding them surfaces as "remaining connection
+	// slots are reserved for roles with the SUPERUSER attribute" on every
+	// subsequent connection attempt. Raise this only if the database's
+	// connection limit and this application's expected concurrency justify
+	// it - remember multi-instance deployments (see docker-compose.multi.yml)
+	// multiply this value by the number of instances sharing the database.
+	maxDBConns, err := parseIntOrDefault("DATABASE_MAX_CONNS", 5)
+	if err != nil {
+		return nil, err
+	}
+	cfg.DatabaseMaxConns = int32(maxDBConns)
 
 	ttlHours, err := parseIntOrDefault("FILE_TTL_HOURS", 24)
 	if err != nil {
@@ -177,6 +193,9 @@ func (c *Config) validate() error {
 		if !allowInsecure {
 			return fmt.Errorf("IP_HASH_SALT must be set to a random secret (refusing to start with the well-known default; set ALLOW_INSECURE_IP_HASH_SALT=true to override for local development only)")
 		}
+	}
+	if c.DatabaseMaxConns <= 0 {
+		return fmt.Errorf("DATABASE_MAX_CONNS must be positive")
 	}
 	if c.NodeHeartbeatIntervalSecs <= 0 {
 		return fmt.Errorf("NODE_HEARTBEAT_INTERVAL_SECONDS must be positive")

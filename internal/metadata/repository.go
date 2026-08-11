@@ -70,12 +70,14 @@ type Stats struct {
 // Postgres for every deployment, including a single standalone instance,
 // so that metadata storage behaves identically regardless of how many
 // instances are running. dsn must be a "postgres://" or "postgresql://"
-// connection string.
-func NewRepository(ctx context.Context, dsn string) (Repository, error) {
+// connection string. maxConns caps the pool size (see
+// NewPostgresRepository) so a single instance doesn't exhaust a managed
+// database's connection slot limit.
+func NewRepository(ctx context.Context, dsn string, maxConns int32) (Repository, error) {
 	if !isPostgresDSN(dsn) {
 		return nil, errInvalidDSN
 	}
-	return NewPostgresRepository(ctx, dsn)
+	return NewPostgresRepository(ctx, dsn, maxConns)
 }
 
 // topLevelMimeType returns the part of a MIME type before "/" (e.g.

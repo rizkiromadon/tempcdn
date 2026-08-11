@@ -25,7 +25,7 @@ func newTestPostgresRepository(t *testing.T) *PostgresRepository {
 	}
 
 	ctx := context.Background()
-	repo, err := NewPostgresRepository(ctx, dsn)
+	repo, err := NewPostgresRepository(ctx, dsn, 5)
 	if err != nil {
 		t.Fatalf("failed to connect to test postgres: %v", err)
 	}
@@ -74,7 +74,12 @@ func TestPostgresMigrateConcurrentStartupIsSafe(t *testing.T) {
 	const instanceCount = 5
 	repos := make([]*PostgresRepository, instanceCount)
 	for i := range repos {
-		repo, err := NewPostgresRepository(ctx, dsn)
+		// maxConns=1 per simulated instance here: this test only needs
+		// each one to issue a handful of sequential statements, and 5
+		// instances x a larger pool each risks tripping the same
+		// connection-slot limits this size cap exists to avoid in the
+		// first place (see NewPostgresRepository).
+		repo, err := NewPostgresRepository(ctx, dsn, 1)
 		if err != nil {
 			t.Fatalf("failed to connect instance %d: %v", i, err)
 		}

@@ -33,11 +33,20 @@ type PostgresRepository struct {
 	pool *pgxpool.Pool
 }
 
-func NewPostgresRepository(ctx context.Context, dsn string) (*PostgresRepository, error) {
+func NewPostgresRepository(ctx context.Context, dsn string, maxConns int32) (*PostgresRepository, error) {
 	poolCfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres dsn: %w", err)
 	}
+	// Cap pool size explicitly rather than relying on pgxpool's default
+	// (4 x NumCPU, minimum 4): managed Postgres providers (e.g. Aiven's
+	// smaller tiers) often reserve only a small number of non-superuser
+	// connection slots, and an uncapped pool - especially across a
+	// crash-loop where old connections haven't been cleaned up yet - can
+	// exhaust them, surfacing as "remaining connection slots are reserved
+	// for roles with the SUPERUSER attribute" on every subsequent
+	// connection attempt, including this one.
+	poolCfg.MaxConns = maxConns
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)

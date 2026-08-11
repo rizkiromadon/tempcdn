@@ -40,7 +40,7 @@ func main() {
 	// string: Postgres is required for every deployment, including a
 	// single standalone instance, not just multi-instance setups (e.g.
 	// srv1/srv2/srv3 behind a rotating frontend).
-	repository, err := metadata.NewRepository(rootCtx, cfg.DatabaseDSN)
+	repository, err := metadata.NewRepository(rootCtx, cfg.DatabaseDSN, cfg.DatabaseMaxConns)
 	if err != nil {
 		log.Error("failed to initialize metadata repository", "error", err)
 		os.Exit(1)

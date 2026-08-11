@@ -51,6 +51,10 @@ services:
       # what makes metadata consistent regardless of which srv a request
       # (or the frontend's rotation) lands on.
       DATABASE_DSN: postgres://tempcdn:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/tempcdn?sslmode=disable
+      # Per-instance cap; with 3 instances sharing this database, total
+      # pool usage across them is roughly 3 x this value. Lower it if the
+      # shared Postgres has a tight connection-slot limit (see README).
+      DATABASE_MAX_CONNS: 5
       FILE_TTL_HOURS: 24
       FILE_SWEEP_INTERVAL_MINUTES: 5
       SERVER_MAX_CONCURRENT_UPLOADS: 50

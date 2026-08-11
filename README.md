@@ -113,6 +113,7 @@ for a ready-to-copy template.
 | `R2_ENDPOINT` | — | R2 S3-compatible endpoint URL. Required. |
 | `R2_PUBLIC_BASE_URL` | — | Public base URL used to build `cdn_url` for uploaded objects. Required. |
 | `DATABASE_DSN` | — | **Required.** Postgres connection string (`postgres://` or `postgresql://`). Required for every deployment, including a single standalone instance. For multiple instances sharing one metadata store, point every instance at the same database. See "Running Multiple Instances" below. |
+| `DATABASE_MAX_CONNS` | `5` | Caps this instance's Postgres connection pool. Managed providers (e.g. Aiven's smaller tiers) often reserve only a handful of non-superuser connection slots — an uncapped or too-large pool can exhaust them, which fails startup with `remaining connection slots are reserved for roles with the SUPERUSER attribute`. In a multi-instance deployment this is effectively multiplied by the instance count. |
 | `FILE_TTL_HOURS` | `24` | Hours before an uploaded file expires. |
 | `FILE_SWEEP_INTERVAL_MINUTES` | `5` | How often the background sweeper checks for and deletes expired files. |
 | `SERVER_MAX_CONCURRENT_UPLOADS` | `50` | Maximum number of uploads processed concurrently by this instance. This is a global, process-wide cap — not per-IP rate limiting (see [Rate limiting strategy](#rate-limiting-strategy)). The older name `RATE_LIMIT_MAX_CONCURRENT_UPLOADS` is still read as a fallback for one deprecation cycle. |
