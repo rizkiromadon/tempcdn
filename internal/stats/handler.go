@@ -30,14 +30,14 @@ type Response struct {
 }
 
 type Handler struct {
-	repository        metadata.Repository
+	repository        metadata.FileRepository
 	uploadsTotal      prometheus.Counter
 	uploadBytesTotal  prometheus.Counter
 	uploadErrorsTotal prometheus.Counter
 	now               func() time.Time
 }
 
-func NewHandler(repository metadata.Repository, uploadsTotal, uploadBytesTotal, uploadErrorsTotal prometheus.Counter) *Handler {
+func NewHandler(repository metadata.FileRepository, uploadsTotal, uploadBytesTotal, uploadErrorsTotal prometheus.Counter) *Handler {
 	return &Handler{
 		repository:        repository,
 		uploadsTotal:      uploadsTotal,

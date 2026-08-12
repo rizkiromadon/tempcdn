@@ -11,11 +11,11 @@ import (
 const sessionJanitorInterval = 1 * time.Hour
 
 type SessionJanitor struct {
-	repository metadata.Repository
+	repository metadata.AdminRepository
 	logger     *slog.Logger
 }
 
-func NewSessionJanitor(repository metadata.Repository, logger *slog.Logger) *SessionJanitor {
+func NewSessionJanitor(repository metadata.AdminRepository, logger *slog.Logger) *SessionJanitor {
 	return &SessionJanitor{repository: repository, logger: logger}
 }
 

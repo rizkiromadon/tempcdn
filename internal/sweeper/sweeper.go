@@ -15,7 +15,7 @@ import (
 const batchSize = 100
 
 type Sweeper struct {
-	repository    metadata.Repository
+	repository    metadata.FileRepository
 	objectStorage storage.ObjectStorage
 	cachePurger   cloudflare.Purger
 	cachePurgeOn  bool
@@ -23,7 +23,7 @@ type Sweeper struct {
 	logger        *slog.Logger
 }
 
-func New(repository metadata.Repository, objectStorage storage.ObjectStorage, cachePurger cloudflare.Purger, cachePurgeOn bool, interval time.Duration, logger *slog.Logger) *Sweeper {
+func New(repository metadata.FileRepository, objectStorage storage.ObjectStorage, cachePurger cloudflare.Purger, cachePurgeOn bool, interval time.Duration, logger *slog.Logger) *Sweeper {
 	return &Sweeper{
 		repository:    repository,
 		objectStorage: objectStorage,

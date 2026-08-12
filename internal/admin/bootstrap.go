@@ -18,7 +18,7 @@ type BootstrapConfig struct {
 	Password string
 }
 
-func Bootstrap(ctx context.Context, repository metadata.Repository, cfg BootstrapConfig) error {
+func Bootstrap(ctx context.Context, repository metadata.AdminRepository, cfg BootstrapConfig) error {
 	count, err := repository.CountAdmins(ctx)
 	if err != nil {
 		return fmt.Errorf("count existing admins: %w", err)
@@ -62,7 +62,7 @@ type UploadSettingsDefaults struct {
 	BlockedExtensions []string
 }
 
-func SeedUploadSettings(ctx context.Context, repository metadata.Repository, defaults UploadSettingsDefaults) error {
+func SeedUploadSettings(ctx context.Context, repository metadata.UploadSettingsRepository, defaults UploadSettingsDefaults) error {
 	return repository.SeedUploadSettingsIfMissing(ctx, &metadata.UploadSettings{
 		MaxUploadSizeMB:   defaults.MaxUploadSizeMB,
 		AllowedMimeTypes:  defaults.AllowedMimeTypes,

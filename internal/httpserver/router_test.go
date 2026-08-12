@@ -279,6 +279,10 @@ func TestMetricsRejectsInvalidAPIKey(t *testing.T) {
 	}
 }
 
+// metricsFakeRepository implements admin.ServiceRepository only — that's
+// all admin.NewService needs, so this fake (used to exercise the /metrics
+// auth middleware in router tests) doesn't need to know about files or
+// nodes at all.
 type metricsFakeRepository struct {
 	apiKeysByHash map[string]*metadata.APIKey
 	apiKeysByID   map[string]*metadata.APIKey
@@ -291,34 +295,6 @@ func newMetricsFakeRepository() *metricsFakeRepository {
 	}
 }
 
-func (f *metricsFakeRepository) Migrate(ctx context.Context) error { panic("not implemented") }
-func (f *metricsFakeRepository) Insert(ctx context.Context, record *metadata.FileRecord) error {
-	panic("not implemented")
-}
-func (f *metricsFakeRepository) FindActiveByChecksum(ctx context.Context, checksum string, now time.Time) (*metadata.FileRecord, error) {
-	panic("not implemented")
-}
-func (f *metricsFakeRepository) FindByID(ctx context.Context, id string) (*metadata.FileRecord, error) {
-	panic("not implemented")
-}
-func (f *metricsFakeRepository) DeleteByID(ctx context.Context, id string) error {
-	panic("not implemented")
-}
-func (f *metricsFakeRepository) FindExpired(ctx context.Context, before time.Time, limit int) ([]*metadata.FileRecord, error) {
-	panic("not implemented")
-}
-func (f *metricsFakeRepository) Stats(ctx context.Context, now time.Time) (*metadata.Stats, error) {
-	panic("not implemented")
-}
-func (f *metricsFakeRepository) Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error {
-	panic("not implemented")
-}
-func (f *metricsFakeRepository) MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error) {
-	panic("not implemented")
-}
-func (f *metricsFakeRepository) ListNodeStatus(ctx context.Context) ([]*metadata.NodeStatus, error) {
-	panic("not implemented")
-}
 func (f *metricsFakeRepository) InsertAdmin(ctx context.Context, admin *metadata.Admin) error {
 	panic("not implemented")
 }
@@ -400,4 +376,3 @@ func (f *metricsFakeRepository) SeedUploadSettingsIfMissing(ctx context.Context,
 func (f *metricsFakeRepository) UpdateUploadSettings(ctx context.Context, settings *metadata.UploadSettings, updatedBy string, now time.Time) error {
 	panic("not implemented")
 }
-func (f *metricsFakeRepository) Close() error { panic("not implemented") }

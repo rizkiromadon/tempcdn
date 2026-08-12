@@ -12,12 +12,12 @@ import (
 const settingsSyncInterval = 10 * time.Second
 
 type SettingsSynchronizer struct {
-	repository metadata.Repository
+	repository metadata.UploadSettingsRepository
 	validator  *Validator
 	logger     *slog.Logger
 }
 
-func NewSettingsSynchronizer(repository metadata.Repository, validator *Validator, logger *slog.Logger) *SettingsSynchronizer {
+func NewSettingsSynchronizer(repository metadata.UploadSettingsRepository, validator *Validator, logger *slog.Logger) *SettingsSynchronizer {
 	return &SettingsSynchronizer{repository: repository, validator: validator, logger: logger}
 }
 

@@ -7,6 +7,11 @@ import (
 	"github.com/rizkiromadon/tempcdn/internal/metadata"
 )
 
+// fakeRepository implements admin.ServiceRepository only (AdminRepository +
+// APIKeyRepository + UploadSettingsRepository) — nothing about files or
+// nodes, because admin.Service never touches those. That's the payoff of
+// depending on narrow interfaces: this fake is a fraction of the size it
+// would be if it had to satisfy the full metadata.Repository.
 type fakeRepository struct {
 	adminsByUsername map[string]*metadata.Admin
 	adminsByID       map[string]*metadata.Admin
@@ -28,33 +33,6 @@ func newFakeRepository() *fakeRepository {
 		apiKeysByHash:    make(map[string]*metadata.APIKey),
 		apiKeysByID:      make(map[string]*metadata.APIKey),
 	}
-}
-
-func (f *fakeRepository) Migrate(ctx context.Context) error { panic("not implemented") }
-func (f *fakeRepository) Insert(ctx context.Context, record *metadata.FileRecord) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) FindActiveByChecksum(ctx context.Context, checksum string, now time.Time) (*metadata.FileRecord, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) FindByID(ctx context.Context, id string) (*metadata.FileRecord, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) DeleteByID(ctx context.Context, id string) error { panic("not implemented") }
-func (f *fakeRepository) FindExpired(ctx context.Context, before time.Time, limit int) ([]*metadata.FileRecord, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) Stats(ctx context.Context, now time.Time) (*metadata.Stats, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) ListNodeStatus(ctx context.Context) ([]*metadata.NodeStatus, error) {
-	panic("not implemented")
 }
 
 func (f *fakeRepository) InsertAdmin(ctx context.Context, admin *metadata.Admin) error {
@@ -222,5 +200,3 @@ func (f *fakeRepository) UpdateUploadSettings(ctx context.Context, settings *met
 	f.uploadSettings = &copyOfSettings
 	return nil
 }
-
-func (f *fakeRepository) Close() error { panic("not implemented") }

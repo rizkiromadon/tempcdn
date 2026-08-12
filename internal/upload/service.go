@@ -18,7 +18,7 @@ import (
 const sniffBufferSize = 512
 
 type Service struct {
-	repository    metadata.Repository
+	repository    metadata.FileRepository
 	objectStorage storage.ObjectStorage
 	validator     *Validator
 	fileTTL       time.Duration
@@ -39,7 +39,7 @@ type Result struct {
 	DeleteToken string
 }
 
-func NewService(repository metadata.Repository, objectStorage storage.ObjectStorage, validator *Validator, fileTTL time.Duration, publicBaseURL string) *Service {
+func NewService(repository metadata.FileRepository, objectStorage storage.ObjectStorage, validator *Validator, fileTTL time.Duration, publicBaseURL string) *Service {
 	return &Service{
 		repository:    repository,
 		objectStorage: objectStorage,

@@ -10,7 +10,7 @@ import (
 )
 
 type Reporter struct {
-	repository metadata.Repository
+	repository metadata.NodeStatusRepository
 	nodeID     string
 	hostname   string
 	interval   time.Duration
@@ -19,7 +19,7 @@ type Reporter struct {
 	now        func() time.Time
 }
 
-func NewReporter(repository metadata.Repository, nodeID, hostname string, interval time.Duration, logger *slog.Logger) *Reporter {
+func NewReporter(repository metadata.NodeStatusRepository, nodeID, hostname string, interval time.Duration, logger *slog.Logger) *Reporter {
 	return &Reporter{
 		repository: repository,
 		nodeID:     nodeID,

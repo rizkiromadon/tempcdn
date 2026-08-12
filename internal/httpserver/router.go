@@ -35,63 +35,50 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	router.Use(Recovery(deps.Logger))
 	router.Use(RequestLogging(deps.Logger, deps.RequestLatency))
 
-	getCORS := CORS(deps.AllowedOrigin, "GET, OPTIONS")
-	healthCORS := CORS(deps.AllowedOrigin, "GET, HEAD, OPTIONS")
-	uploadCORS := CORS(deps.AllowedOrigin, "POST, OPTIONS")
+	origin := deps.AllowedOrigin
 
-	fileGetCORS := CORS("*", "GET, OPTIONS")
-	fileDeleteCORS := CORS(deps.AllowedOrigin, "DELETE, OPTIONS")
-	metricsCORS := CORS(deps.AllowedOrigin, "GET, OPTIONS")
-	noop := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
-
+	healthCORS := CORS(origin, "GET, HEAD, OPTIONS")
 	router.With(healthCORS).Get("/healthz", handleHealthCheck)
-
 	router.With(healthCORS).Head("/healthz", handleHealthCheckHead)
-	router.Options("/healthz", healthCORS(noop).ServeHTTP)
+	router.Options("/healthz", healthCORS(noopHandler).ServeHTTP)
+
+	metricsCORS := CORS(origin, "GET, OPTIONS")
 	router.With(metricsCORS, metricsAuth(deps.AdminService, deps.Logger)).Handle("/metrics", promhttp.Handler())
-	router.Options("/metrics", metricsCORS(noop).ServeHTTP)
+	router.Options("/metrics", metricsCORS(noopHandler).ServeHTTP)
 
 	router.Route("/api/v1", func(apiRouter chi.Router) {
-		apiRouter.With(uploadCORS).Post("/upload", deps.UploadHandler.ServeHTTP)
-		apiRouter.Options("/upload", uploadCORS(noop).ServeHTTP)
+		apiReg := newRouteRegistry()
+		apiReg.route(apiRouter, origin, http.MethodPost, "/upload", deps.UploadHandler.ServeHTTP)
 
+		// /files/{id} is the one endpoint with two different CORS policies
+		// on the same path (public GET, restricted-origin DELETE), so it's
+		// wired by hand instead of through route(). Every other endpoint
+		// below is a single-method, single-CORS-policy resource and uses
+		// route() — see middleware.go for what that one call expands to.
+		fileGetCORS := CORS("*", "GET, OPTIONS")
+		fileDeleteCORS := CORS(origin, "DELETE, OPTIONS")
 		apiRouter.With(fileGetCORS).Get("/files/{id}", deps.FileHandler.GetInfo)
 		apiRouter.With(fileDeleteCORS).Delete("/files/{id}", deps.FileHandler.Delete)
+		apiRouter.Options("/files/{id}", filePreflightCORS(fileGetCORS, fileDeleteCORS, noopHandler).ServeHTTP)
 
-		apiRouter.Options("/files/{id}", filePreflightCORS(fileGetCORS, fileDeleteCORS, noop).ServeHTTP)
+		apiReg.route(apiRouter, origin, http.MethodGet, "/config", deps.ConfigHandler.ServeHTTP)
+		apiReg.route(apiRouter, origin, http.MethodGet, "/stats", deps.StatsHandler.ServeHTTP)
+		apiReg.route(apiRouter, origin, http.MethodGet, "/nodes", deps.NodeStatusHandler.ServeHTTP)
 
-		apiRouter.With(getCORS).Get("/config", deps.ConfigHandler.ServeHTTP)
-		apiRouter.Options("/config", getCORS(noop).ServeHTTP)
+		requireAdmin := admin.RequireAdminSession(deps.AdminService, deps.Logger)
 
-		apiRouter.With(getCORS).Get("/stats", deps.StatsHandler.ServeHTTP)
-		apiRouter.Options("/stats", getCORS(noop).ServeHTTP)
-
-		apiRouter.With(getCORS).Get("/nodes", deps.NodeStatusHandler.ServeHTTP)
-		apiRouter.Options("/nodes", getCORS(noop).ServeHTTP)
-
-		adminCORS := CORS(deps.AllowedOrigin, "GET, POST, OPTIONS")
 		apiRouter.Route("/admin", func(adminRouter chi.Router) {
+			adminReg := newRouteRegistry()
+			adminReg.route(adminRouter, origin, http.MethodPost, "/login", deps.AdminHandler.Login)
+			adminReg.route(adminRouter, origin, http.MethodPost, "/logout", deps.AdminHandler.Logout, requireAdmin)
+			adminReg.route(adminRouter, origin, http.MethodGet, "/me", deps.AdminHandler.Me, requireAdmin)
 
-			adminRouter.With(adminCORS).Post("/login", deps.AdminHandler.Login)
-			adminRouter.Options("/login", adminCORS(noop).ServeHTTP)
+			adminReg.route(adminRouter, origin, http.MethodPost, "/api-keys", deps.AdminHandler.CreateAPIKey, requireAdmin)
+			adminReg.route(adminRouter, origin, http.MethodGet, "/api-keys", deps.AdminHandler.ListAPIKeys, requireAdmin)
+			adminReg.route(adminRouter, origin, http.MethodDelete, "/api-keys/{id}", deps.AdminHandler.RevokeAPIKey, requireAdmin)
 
-			adminRouter.With(adminCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Post("/logout", deps.AdminHandler.Logout)
-			adminRouter.Options("/logout", adminCORS(noop).ServeHTTP)
-
-			adminRouter.With(adminCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Get("/me", deps.AdminHandler.Me)
-			adminRouter.Options("/me", adminCORS(noop).ServeHTTP)
-
-			apiKeysCORS := CORS(deps.AllowedOrigin, "GET, POST, DELETE, OPTIONS")
-			adminRouter.With(apiKeysCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Post("/api-keys", deps.AdminHandler.CreateAPIKey)
-			adminRouter.With(apiKeysCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Get("/api-keys", deps.AdminHandler.ListAPIKeys)
-			adminRouter.With(apiKeysCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Delete("/api-keys/{id}", deps.AdminHandler.RevokeAPIKey)
-			adminRouter.Options("/api-keys", apiKeysCORS(noop).ServeHTTP)
-			adminRouter.Options("/api-keys/{id}", apiKeysCORS(noop).ServeHTTP)
-
-			uploadSettingsCORS := CORS(deps.AllowedOrigin, "GET, PUT, OPTIONS")
-			adminRouter.With(uploadSettingsCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Get("/upload-settings", deps.AdminHandler.GetUploadSettings)
-			adminRouter.With(uploadSettingsCORS, admin.RequireAdminSession(deps.AdminService, deps.Logger)).Put("/upload-settings", deps.AdminHandler.UpdateUploadSettings)
-			adminRouter.Options("/upload-settings", uploadSettingsCORS(noop).ServeHTTP)
+			adminReg.route(adminRouter, origin, http.MethodGet, "/upload-settings", deps.AdminHandler.GetUploadSettings, requireAdmin)
+			adminReg.route(adminRouter, origin, http.MethodPut, "/upload-settings", deps.AdminHandler.UpdateUploadSettings, requireAdmin)
 		})
 	})
 

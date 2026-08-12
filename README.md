@@ -2,6 +2,11 @@
 
 Repository: https://github.com/rizkiromadon/tempcdn
 
+> Working on the backend itself (adding a new endpoint/resource)? See
+> [CONTRIBUTING.md](CONTRIBUTING.md) for the developer-facing walkthrough —
+> this README documents the HTTP API from a client's point of view.
+
+
 TempCDN is a login-free file upload backend. Files are stored physically in
 Cloudflare R2, metadata is stored in Postgres (a single standalone instance
 or multiple instances sharing one metadata store), and every file is

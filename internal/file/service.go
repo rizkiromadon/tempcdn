@@ -17,14 +17,14 @@ var ErrAlreadyExpired = errors.New("file has already expired")
 var ErrInvalidDeleteToken = errors.New("invalid or missing delete token")
 
 type Service struct {
-	repository    metadata.Repository
+	repository    metadata.FileRepository
 	objectStorage storage.ObjectStorage
 	cachePurger   cloudflare.Purger
 	cachePurgeOn  bool
 	logger        *slog.Logger
 }
 
-func NewService(repository metadata.Repository, objectStorage storage.ObjectStorage, cachePurger cloudflare.Purger, cachePurgeOn bool, logger *slog.Logger) *Service {
+func NewService(repository metadata.FileRepository, objectStorage storage.ObjectStorage, cachePurger cloudflare.Purger, cachePurgeOn bool, logger *slog.Logger) *Service {
 	return &Service{
 		repository:    repository,
 		objectStorage: objectStorage,

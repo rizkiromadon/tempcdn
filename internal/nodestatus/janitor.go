@@ -9,14 +9,14 @@ import (
 )
 
 type Janitor struct {
-	repository metadata.Repository
+	repository metadata.NodeStatusRepository
 	interval   time.Duration
 	staleAfter time.Duration
 	logger     *slog.Logger
 	now        func() time.Time
 }
 
-func NewJanitor(repository metadata.Repository, interval, staleAfter time.Duration, logger *slog.Logger) *Janitor {
+func NewJanitor(repository metadata.NodeStatusRepository, interval, staleAfter time.Duration, logger *slog.Logger) *Janitor {
 	return &Janitor{
 		repository: repository,
 		interval:   interval,

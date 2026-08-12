@@ -25,11 +25,11 @@ type ListResponse struct {
 }
 
 type Handler struct {
-	repository metadata.Repository
+	repository metadata.NodeStatusRepository
 	now        func() time.Time
 }
 
-func NewHandler(repository metadata.Repository) *Handler {
+func NewHandler(repository metadata.NodeStatusRepository) *Handler {
 	return &Handler{repository: repository, now: time.Now}
 }
 

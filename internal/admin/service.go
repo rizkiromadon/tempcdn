@@ -23,12 +23,22 @@ const minPasswordLength = 12
 
 const sessionTTL = 24 * time.Hour
 
+// ServiceRepository is everything admin.Service needs to persist. It is a
+// composition of the narrow domain interfaces from package metadata, kept
+// local to this package so the dependency is explicit and easy to fake in
+// tests without pulling in unrelated repository methods (files, nodes...).
+type ServiceRepository interface {
+	metadata.AdminRepository
+	metadata.APIKeyRepository
+	metadata.UploadSettingsRepository
+}
+
 type Service struct {
-	repository metadata.Repository
+	repository ServiceRepository
 	now        func() time.Time
 }
 
-func NewService(repository metadata.Repository) *Service {
+func NewService(repository ServiceRepository) *Service {
 	return &Service{
 		repository: repository,
 		now:        func() time.Time { return time.Now().UTC() },

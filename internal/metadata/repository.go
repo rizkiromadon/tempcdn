@@ -21,59 +21,71 @@ var ErrUploadSettingsNotFound = errors.New("upload settings not found")
 
 var errInvalidDSN = errors.New(`invalid DATABASE_DSN: tempcdn requires Postgres; DATABASE_DSN must start with "postgres://" or "postgresql://"`)
 
-type Repository interface {
-	Migrate(ctx context.Context) error
+// FileRepository is the persistence contract for uploaded file records.
+// Anything that only needs to work with files (upload service, file service,
+// sweeper, stats) should depend on this narrow interface instead of the
+// full Repository.
+type FileRepository interface {
 	Insert(ctx context.Context, record *FileRecord) error
 	FindActiveByChecksum(ctx context.Context, checksum string, now time.Time) (*FileRecord, error)
 	FindByID(ctx context.Context, id string) (*FileRecord, error)
 	DeleteByID(ctx context.Context, id string) error
-
 	FindExpired(ctx context.Context, before time.Time, limit int) ([]*FileRecord, error)
-
 	Stats(ctx context.Context, now time.Time) (*Stats, error)
+}
 
+// NodeStatusRepository is the persistence contract for node heartbeats.
+type NodeStatusRepository interface {
 	Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error
-
 	MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error)
-
 	ListNodeStatus(ctx context.Context) ([]*NodeStatus, error)
+}
 
+// AdminRepository is the persistence contract for admin accounts and sessions.
+type AdminRepository interface {
 	InsertAdmin(ctx context.Context, admin *Admin) error
-
 	FindAdminByUsername(ctx context.Context, username string) (*Admin, error)
-
 	FindAdminByID(ctx context.Context, id string) (*Admin, error)
-
 	CountAdmins(ctx context.Context) (int64, error)
-
 	TouchAdminLastLogin(ctx context.Context, adminID string, now time.Time) error
 
 	InsertAdminSession(ctx context.Context, session *AdminSession) error
-
 	FindAdminSessionByTokenHash(ctx context.Context, tokenHash string) (*AdminSession, error)
-
 	TouchAdminSession(ctx context.Context, tokenHash string, now time.Time) error
-
 	DeleteAdminSession(ctx context.Context, tokenHash string) error
-
 	DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error
+}
 
+// APIKeyRepository is the persistence contract for admin API keys.
+type APIKeyRepository interface {
 	InsertAPIKey(ctx context.Context, key *APIKey) error
-
 	FindAPIKeyByTokenHash(ctx context.Context, tokenHash string) (*APIKey, error)
-
 	ListAPIKeys(ctx context.Context) ([]*APIKey, error)
-
 	TouchAPIKey(ctx context.Context, id string, now time.Time) error
-
 	RevokeAPIKey(ctx context.Context, id string, now time.Time) error
+}
 
+// UploadSettingsRepository is the persistence contract for global upload settings.
+type UploadSettingsRepository interface {
 	GetUploadSettings(ctx context.Context) (*UploadSettings, error)
-
 	SeedUploadSettingsIfMissing(ctx context.Context, settings *UploadSettings) error
-
 	UpdateUploadSettings(ctx context.Context, settings *UploadSettings, updatedBy string, now time.Time) error
+}
 
+// Repository is the full union of every domain repository, plus lifecycle
+// methods (Migrate/Close). It exists so cmd/server/main.go can construct a
+// single concrete repository and hand out narrower interfaces to each
+// service. New code should depend on the smallest domain interface above
+// that it actually needs, not on Repository itself — that keeps a new
+// feature's dependency list honest and makes fakes trivial to write in tests.
+type Repository interface {
+	FileRepository
+	NodeStatusRepository
+	AdminRepository
+	APIKeyRepository
+	UploadSettingsRepository
+
+	Migrate(ctx context.Context) error
 	Close() error
 }
 

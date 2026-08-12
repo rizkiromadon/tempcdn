@@ -12,12 +12,14 @@ import (
 	"github.com/rizkiromadon/tempcdn/internal/metadata"
 )
 
+// fakeRepository implements metadata.FileRepository only — that's all
+// stats.Handler depends on, so the fake doesn't need to know about admins,
+// nodes, or api keys at all.
 type fakeRepository struct {
 	stats    *metadata.Stats
 	statsErr error
 }
 
-func (f *fakeRepository) Migrate(ctx context.Context) error { panic("not implemented") }
 func (f *fakeRepository) Insert(ctx context.Context, record *metadata.FileRecord) error {
 	panic("not implemented")
 }
@@ -36,70 +38,6 @@ func (f *fakeRepository) FindExpired(ctx context.Context, before time.Time, limi
 func (f *fakeRepository) Stats(ctx context.Context, now time.Time) (*metadata.Stats, error) {
 	return f.stats, f.statsErr
 }
-func (f *fakeRepository) Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) ListNodeStatus(ctx context.Context) ([]*metadata.NodeStatus, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) InsertAdmin(ctx context.Context, admin *metadata.Admin) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) FindAdminByUsername(ctx context.Context, username string) (*metadata.Admin, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) FindAdminByID(ctx context.Context, id string) (*metadata.Admin, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) CountAdmins(ctx context.Context) (int64, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) TouchAdminLastLogin(ctx context.Context, adminID string, now time.Time) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) InsertAdminSession(ctx context.Context, session *metadata.AdminSession) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) FindAdminSessionByTokenHash(ctx context.Context, tokenHash string) (*metadata.AdminSession, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) TouchAdminSession(ctx context.Context, tokenHash string, now time.Time) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) DeleteAdminSession(ctx context.Context, tokenHash string) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) InsertAPIKey(ctx context.Context, key *metadata.APIKey) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) FindAPIKeyByTokenHash(ctx context.Context, tokenHash string) (*metadata.APIKey, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) ListAPIKeys(ctx context.Context) ([]*metadata.APIKey, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) TouchAPIKey(ctx context.Context, id string, now time.Time) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) RevokeAPIKey(ctx context.Context, id string, now time.Time) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) GetUploadSettings(ctx context.Context) (*metadata.UploadSettings, error) {
-	panic("not implemented")
-}
-func (f *fakeRepository) SeedUploadSettingsIfMissing(ctx context.Context, settings *metadata.UploadSettings) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) UpdateUploadSettings(ctx context.Context, settings *metadata.UploadSettings, updatedBy string, now time.Time) error {
-	panic("not implemented")
-}
-func (f *fakeRepository) Close() error { panic("not implemented") }
 
 func newTestCounters() (uploads, bytesTotal, errorsTotal prometheus.Counter) {
 	return prometheus.NewCounter(prometheus.CounterOpts{Name: "test_uploads_total"}),

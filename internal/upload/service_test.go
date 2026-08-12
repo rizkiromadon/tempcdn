@@ -29,6 +29,10 @@ func (m *mockObjectStorage) DeleteObject(ctx context.Context, key string) error 
 	return nil
 }
 
+// mockRepository implements metadata.FileRepository and
+// metadata.UploadSettingsRepository — the two interfaces actually used in
+// this package, by upload.Service and upload.SettingsSynchronizer
+// respectively. It does not need to know about admins, nodes, or api keys.
 type mockRepository struct {
 	recordsByChecksum map[string]*metadata.FileRecord
 	insertedRecords   []*metadata.FileRecord
@@ -41,8 +45,6 @@ func newMockRepository() *mockRepository {
 		recordsByChecksum: make(map[string]*metadata.FileRecord),
 	}
 }
-
-func (m *mockRepository) Migrate(ctx context.Context) error { return nil }
 
 func (m *mockRepository) Insert(ctx context.Context, record *metadata.FileRecord) error {
 	m.recordsByChecksum[record.ChecksumSHA256] = record
@@ -88,52 +90,6 @@ func (m *mockRepository) Stats(ctx context.Context, now time.Time) (*metadata.St
 	return &metadata.Stats{ContentTypeBreakdown: map[string]int64{}}, nil
 }
 
-func (m *mockRepository) Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error {
-	return nil
-}
-func (m *mockRepository) MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error) {
-	return nil, nil
-}
-func (m *mockRepository) ListNodeStatus(ctx context.Context) ([]*metadata.NodeStatus, error) {
-	return nil, nil
-}
-func (m *mockRepository) InsertAdmin(ctx context.Context, admin *metadata.Admin) error { return nil }
-func (m *mockRepository) FindAdminByUsername(ctx context.Context, username string) (*metadata.Admin, error) {
-	return nil, metadata.ErrAdminNotFound
-}
-func (m *mockRepository) FindAdminByID(ctx context.Context, id string) (*metadata.Admin, error) {
-	return nil, metadata.ErrAdminNotFound
-}
-func (m *mockRepository) CountAdmins(ctx context.Context) (int64, error) { return 0, nil }
-func (m *mockRepository) TouchAdminLastLogin(ctx context.Context, adminID string, now time.Time) error {
-	return nil
-}
-func (m *mockRepository) InsertAdminSession(ctx context.Context, session *metadata.AdminSession) error {
-	return nil
-}
-func (m *mockRepository) FindAdminSessionByTokenHash(ctx context.Context, tokenHash string) (*metadata.AdminSession, error) {
-	return nil, metadata.ErrAdminSessionNotFound
-}
-func (m *mockRepository) TouchAdminSession(ctx context.Context, tokenHash string, now time.Time) error {
-	return nil
-}
-func (m *mockRepository) DeleteAdminSession(ctx context.Context, tokenHash string) error { return nil }
-func (m *mockRepository) DeleteExpiredAdminSessions(ctx context.Context, before time.Time) error {
-	return nil
-}
-func (m *mockRepository) InsertAPIKey(ctx context.Context, key *metadata.APIKey) error { return nil }
-func (m *mockRepository) FindAPIKeyByTokenHash(ctx context.Context, tokenHash string) (*metadata.APIKey, error) {
-	return nil, metadata.ErrAPIKeyNotFound
-}
-func (m *mockRepository) ListAPIKeys(ctx context.Context) ([]*metadata.APIKey, error) {
-	return nil, nil
-}
-func (m *mockRepository) TouchAPIKey(ctx context.Context, id string, now time.Time) error {
-	return nil
-}
-func (m *mockRepository) RevokeAPIKey(ctx context.Context, id string, now time.Time) error {
-	return nil
-}
 func (m *mockRepository) GetUploadSettings(ctx context.Context) (*metadata.UploadSettings, error) {
 	if m.uploadSettings == nil {
 		return nil, metadata.ErrUploadSettingsNotFound
@@ -147,7 +103,6 @@ func (m *mockRepository) SeedUploadSettingsIfMissing(ctx context.Context, settin
 func (m *mockRepository) UpdateUploadSettings(ctx context.Context, settings *metadata.UploadSettings, updatedBy string, now time.Time) error {
 	return metadata.ErrUploadSettingsNotFound
 }
-func (m *mockRepository) Close() error { return nil }
 
 func TestUploadServiceFirstUploadStoresObjectAndMetadata(t *testing.T) {
 	repo := newMockRepository()
