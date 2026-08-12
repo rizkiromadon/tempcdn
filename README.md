@@ -375,9 +375,12 @@ valid admin session (`Authorization: Bearer <session token>`, see
 
 Changes take effect immediately on the instance that handled the `PUT`
 request. In a multi-instance deployment (see "Running Multiple Instances"),
-other instances pick up the change the next time they restart and re-read
-`upload_settings` from the database; there is currently no live
-cross-instance push.
+every other instance sharing the same database picks up the change within
+10 seconds (`upload.SettingsSynchronizer`, which polls `upload_settings`
+in the background) — no restart needed. This means it's normal for a
+`GET /api/v1/config` or an upload against a *different* instance than the
+one that handled the `PUT` to briefly (up to ~10s) still reflect the old
+limits.
 
 #### Get current settings
 
@@ -894,4 +897,7 @@ formats for both modes.
 
 Each instance still runs its own sweeper goroutine and its own in-memory
 concurrency limiter; see Known Limitations above for what that does and
-doesn't mean for correctness at multi-instance scale.
+doesn't mean for correctness at multi-instance scale. Each instance also
+runs its own `upload.SettingsSynchronizer`, polling `upload_settings`
+every 10 seconds so an admin-configured limit change converges across
+every instance without a restart (see [Upload Settings](#upload-settings)).

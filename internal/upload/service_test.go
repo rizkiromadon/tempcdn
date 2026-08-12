@@ -32,6 +32,11 @@ func (m *mockObjectStorage) DeleteObject(ctx context.Context, key string) error 
 type mockRepository struct {
 	recordsByChecksum map[string]*metadata.FileRecord
 	insertedRecords   []*metadata.FileRecord
+
+	// uploadSettings backs GetUploadSettings for tests that need it to
+	// return real data (e.g. SettingsSynchronizer tests), rather than the
+	// hardcoded ErrUploadSettingsNotFound below. nil means "not seeded".
+	uploadSettings *metadata.UploadSettings
 }
 
 func newMockRepository() *mockRepository {
@@ -133,7 +138,11 @@ func (m *mockRepository) RevokeAPIKey(ctx context.Context, id string, now time.T
 	return nil
 }
 func (m *mockRepository) GetUploadSettings(ctx context.Context) (*metadata.UploadSettings, error) {
-	return nil, metadata.ErrUploadSettingsNotFound
+	if m.uploadSettings == nil {
+		return nil, metadata.ErrUploadSettingsNotFound
+	}
+	copyOfSettings := *m.uploadSettings
+	return &copyOfSettings, nil
 }
 func (m *mockRepository) SeedUploadSettingsIfMissing(ctx context.Context, settings *metadata.UploadSettings) error {
 	return nil

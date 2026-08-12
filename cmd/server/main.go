@@ -117,15 +117,22 @@ func main() {
 
 	// Whenever an admin successfully changes upload settings through the
 	// API, push the new values into this instance's in-memory validator
-	// immediately. Note this only updates the instance that served the
-	// request - see the README/deployment notes for multi-instance
-	// (srv1/srv2/srv3) deployments on how other instances pick up the
-	// change (each instance re-reads upload_settings from the database on
-	// its own restart; near-term cross-instance propagation without a
-	// restart is not yet implemented).
+	// immediately - this instance doesn't need to wait for the poller
+	// below. Every other instance sharing this database (including this
+	// one after a restart) picks up the change within settingsSyncInterval
+	// via the SettingsSynchronizer poller started below - see
+	// upload.SettingsSynchronizer for why a restart is no longer required.
 	adminHandler.SetUploadSettingsUpdatedCallback(func(settings *metadata.UploadSettings) {
 		validator.Update(settings.MaxUploadSizeMB*1024*1024, settings.AllowedMimeTypes, settings.BlockedExtensions)
 	})
+
+	// Keeps this instance's validator converged with whatever the
+	// currently-active admin-configured settings are, even when the
+	// change was made through a *different* instance (see "Running
+	// Multiple Instances" in the README) - the callback above only covers
+	// the instance that directly handled the PUT request.
+	settingsSynchronizer := upload.NewSettingsSynchronizer(repository, validator, log)
+	go settingsSynchronizer.Run(rootCtx)
 
 	uploadService := upload.NewService(
 		repository,
