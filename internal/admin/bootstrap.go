@@ -70,3 +70,29 @@ func SeedUploadSettings(ctx context.Context, repository metadata.UploadSettingsR
 		UpdatedAt:         time.Now().UTC(),
 	})
 }
+
+const defaultTermsContent = "No terms of service have been configured yet."
+
+const defaultPrivacyContent = "No privacy policy has been configured yet."
+
+// SeedLegalDocuments ensures the "terms" and "privacy" rows exist so the
+// public GET endpoints never 404 on a freshly deployed instance. It's a
+// placeholder until an admin sets real content via the admin API.
+func SeedLegalDocuments(ctx context.Context, repository metadata.LegalDocumentRepository) error {
+	now := time.Now().UTC()
+	if err := repository.SeedLegalDocumentIfMissing(ctx, &metadata.LegalDocument{
+		DocType:   metadata.LegalDocTerms,
+		Content:   defaultTermsContent,
+		UpdatedAt: now,
+	}); err != nil {
+		return fmt.Errorf("seed terms document: %w", err)
+	}
+	if err := repository.SeedLegalDocumentIfMissing(ctx, &metadata.LegalDocument{
+		DocType:   metadata.LegalDocPrivacy,
+		Content:   defaultPrivacyContent,
+		UpdatedAt: now,
+	}); err != nil {
+		return fmt.Errorf("seed privacy document: %w", err)
+	}
+	return nil
+}

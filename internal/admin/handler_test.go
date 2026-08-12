@@ -347,3 +347,137 @@ func TestHandlerUpdateUploadSettingsReturns400OnMalformedBody(t *testing.T) {
 		t.Errorf("expected 400 for malformed body, got %d", rec.Code)
 	}
 }
+
+func TestHandlerGetTermsReturnsCurrentContent(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestLegalDocuments(t, repo)
+	svc := NewService(repo)
+	handler := NewHandler(svc, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/legal/terms", nil)
+	rec := httptest.NewRecorder()
+
+	handler.GetTerms(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body legalDocumentResponseBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if body.DocType != metadata.LegalDocTerms {
+		t.Errorf("expected doc_type=%s, got %s", metadata.LegalDocTerms, body.DocType)
+	}
+	if body.Content != "Default terms." {
+		t.Errorf("expected default terms content, got %q", body.Content)
+	}
+}
+
+func TestHandlerGetPrivacyReturns404WhenUnseeded(t *testing.T) {
+	repo := newFakeRepository()
+	svc := NewService(repo)
+	handler := NewHandler(svc, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/legal/privacy", nil)
+	rec := httptest.NewRecorder()
+
+	handler.GetPrivacy(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerUpdateTermsPersistsChange(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestLegalDocuments(t, repo)
+	newTestAdmin(t, repo, "alice", "correct-horse-battery-staple")
+	svc := NewService(repo)
+	handler := NewHandler(svc, testLogger())
+
+	loginResult, err := svc.Login(context.Background(), "alice", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatalf("login failed: %v", err)
+	}
+	session, err := svc.VerifySession(context.Background(), loginResult.Token)
+	if err != nil {
+		t.Fatalf("verify session failed: %v", err)
+	}
+
+	body, _ := json.Marshal(updateLegalDocumentRequestBody{
+		Content: "Updated terms of service.",
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/legal/terms", bytes.NewReader(body))
+	ctx := context.WithValue(req.Context(), sessionContextKey, session)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.UpdateTerms(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp legalDocumentResponseBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Content != "Updated terms of service." {
+		t.Errorf("expected updated content in response, got %q", resp.Content)
+	}
+
+	stored, err := svc.GetLegalDocument(context.Background(), metadata.LegalDocTerms)
+	if err != nil {
+		t.Fatalf("failed to re-read document: %v", err)
+	}
+	if stored.Content != "Updated terms of service." {
+		t.Errorf("expected persisted content, got %q", stored.Content)
+	}
+}
+
+func TestHandlerUpdatePrivacyReturns400OnEmptyContent(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestLegalDocuments(t, repo)
+	newTestAdmin(t, repo, "alice", "correct-horse-battery-staple")
+	svc := NewService(repo)
+	handler := NewHandler(svc, testLogger())
+
+	loginResult, err := svc.Login(context.Background(), "alice", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatalf("login failed: %v", err)
+	}
+	session, err := svc.VerifySession(context.Background(), loginResult.Token)
+	if err != nil {
+		t.Fatalf("verify session failed: %v", err)
+	}
+
+	body, _ := json.Marshal(updateLegalDocumentRequestBody{Content: "   "})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/legal/privacy", bytes.NewReader(body))
+	ctx := context.WithValue(req.Context(), sessionContextKey, session)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.UpdatePrivacy(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerUpdateTermsReturns400OnMalformedBody(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestLegalDocuments(t, repo)
+	svc := NewService(repo)
+	handler := NewHandler(svc, testLogger())
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/legal/terms", bytes.NewReader([]byte("not json")))
+	rec := httptest.NewRecorder()
+
+	handler.UpdateTerms(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for malformed body, got %d", rec.Code)
+	}
+}

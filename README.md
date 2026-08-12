@@ -32,6 +32,7 @@ core "temporary" guarantee.
   - [Admin Authentication](#admin-authentication)
   - [API Keys](#api-keys)
   - [Upload Settings](#upload-settings)
+  - [Legal Documents](#legal-documents)
   - [Config](#config)
   - [Stats](#stats)
   - [Node Status](#node-status)
@@ -446,6 +447,84 @@ the newly saved values.
 
 **Response `400 Bad Request`** — the submitted settings failed one of the
 checks above; the error message identifies which one.
+
+### Legal Documents
+
+Reads and changes admin-editable legal document content (terms of service,
+privacy policy). Each document is stored as a single row in the
+`legal_documents` table, seeded on first boot with placeholder text, and
+edited afterward via the admin API — no redeploy needed. There is one
+public read endpoint and one admin read/write pair per document.
+
+#### Get terms of service (public)
+
+```
+GET /api/v1/legal/terms
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "doc_type": "terms",
+  "content": "...",
+  "updated_at": "2026-08-11T09:00:00Z",
+  "updated_by": "a1c4...7d02"
+}
+```
+
+`updated_by` is the admin ID who last changed the document via `PUT` below,
+and is omitted if the document still holds its original boot-time seed.
+
+#### Get privacy policy (public)
+
+```
+GET /api/v1/legal/privacy
+```
+
+Same response shape as `GET /api/v1/legal/terms` above, with
+`"doc_type": "privacy"`.
+
+#### Get / update terms of service (admin)
+
+```
+GET /api/v1/admin/legal/terms
+Authorization: Bearer <session token>
+```
+
+```
+PUT /api/v1/admin/legal/terms
+Authorization: Bearer <session token>
+Content-Type: application/json
+
+{
+  "content": "..."
+}
+```
+
+`content` must not be empty (or whitespace-only). **Response `200 OK`** —
+same shape as the public `GET` above, reflecting the newly saved content.
+**Response `400 Bad Request`** if `content` is empty.
+
+#### Get / update privacy policy (admin)
+
+```
+GET /api/v1/admin/legal/privacy
+Authorization: Bearer <session token>
+```
+
+```
+PUT /api/v1/admin/legal/privacy
+Authorization: Bearer <session token>
+Content-Type: application/json
+
+{
+  "content": "..."
+}
+```
+
+Same validation and response shape as the terms endpoints above, for the
+`privacy` document.
 
 ### Config
 

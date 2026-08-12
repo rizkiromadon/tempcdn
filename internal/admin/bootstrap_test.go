@@ -137,3 +137,48 @@ func TestSeedUploadSettingsIsNoOpWhenRowAlreadyExists(t *testing.T) {
 		t.Errorf("expected admin-changed value 999 to survive re-seed, got %d", repo.uploadSettings.MaxUploadSizeMB)
 	}
 }
+
+func TestSeedLegalDocumentsCreatesBothRowsWhenNoneExist(t *testing.T) {
+	repo := newFakeRepository()
+
+	if err := SeedLegalDocuments(context.Background(), repo); err != nil {
+		t.Fatalf("expected seed to succeed, got: %v", err)
+	}
+
+	terms, exists := repo.legalDocuments[metadata.LegalDocTerms]
+	if !exists {
+		t.Fatal("expected a terms row to be created")
+	}
+	if terms.Content != defaultTermsContent {
+		t.Errorf("expected default terms content, got %q", terms.Content)
+	}
+	if terms.UpdatedBy != nil {
+		t.Error("expected updated_by to be nil for a boot-time seed, not an admin-initiated change")
+	}
+
+	privacy, exists := repo.legalDocuments[metadata.LegalDocPrivacy]
+	if !exists {
+		t.Fatal("expected a privacy row to be created")
+	}
+	if privacy.Content != defaultPrivacyContent {
+		t.Errorf("expected default privacy content, got %q", privacy.Content)
+	}
+}
+
+func TestSeedLegalDocumentsIsNoOpWhenRowsAlreadyExist(t *testing.T) {
+	repo := newFakeRepository()
+
+	if err := SeedLegalDocuments(context.Background(), repo); err != nil {
+		t.Fatalf("first seed failed: %v", err)
+	}
+
+	repo.legalDocuments[metadata.LegalDocTerms].Content = "Admin-edited terms."
+
+	if err := SeedLegalDocuments(context.Background(), repo); err != nil {
+		t.Fatalf("second seed (simulating a restart) failed: %v", err)
+	}
+
+	if repo.legalDocuments[metadata.LegalDocTerms].Content != "Admin-edited terms." {
+		t.Errorf("expected admin-changed content to survive re-seed, got %q", repo.legalDocuments[metadata.LegalDocTerms].Content)
+	}
+}

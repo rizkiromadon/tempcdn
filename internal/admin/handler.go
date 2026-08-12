@@ -244,6 +244,87 @@ func (h *Handler) UpdateUploadSettings(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, toUploadSettingsResponseBody(settings))
 }
 
+type legalDocumentResponseBody struct {
+	DocType   string  `json:"doc_type"`
+	Content   string  `json:"content"`
+	UpdatedAt string  `json:"updated_at"`
+	UpdatedBy *string `json:"updated_by,omitempty"`
+}
+
+func toLegalDocumentResponseBody(doc *metadata.LegalDocument) legalDocumentResponseBody {
+	return legalDocumentResponseBody{
+		DocType:   doc.DocType,
+		Content:   doc.Content,
+		UpdatedAt: doc.UpdatedAt.Format(apiTimeFormat),
+		UpdatedBy: doc.UpdatedBy,
+	}
+}
+
+func (h *Handler) getLegalDocument(w http.ResponseWriter, r *http.Request, docType string) {
+	doc, err := h.service.GetLegalDocument(r.Context(), docType)
+	if errors.Is(err, metadata.ErrLegalDocumentNotFound) {
+		response.Error(w, http.StatusNotFound, "legal document not found")
+		return
+	}
+	if err != nil {
+		h.logger.Error("admin_get_legal_document_failed", "error", err, "doc_type", docType)
+		response.Error(w, http.StatusInternalServerError, "failed to get legal document")
+		return
+	}
+	response.JSON(w, http.StatusOK, toLegalDocumentResponseBody(doc))
+}
+
+type updateLegalDocumentRequestBody struct {
+	Content string `json:"content"`
+}
+
+func (h *Handler) updateLegalDocument(w http.ResponseWriter, r *http.Request, docType string) {
+	var body updateLegalDocumentRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	session, ok := SessionFromContext(r.Context())
+	if !ok {
+		response.Error(w, http.StatusInternalServerError, "missing session context")
+		return
+	}
+
+	doc, err := h.service.UpdateLegalDocument(r.Context(), docType, body.Content, session.Admin.ID)
+	if errors.Is(err, ErrLegalDocumentContentEmpty) {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, metadata.ErrLegalDocumentNotFound) {
+		response.Error(w, http.StatusNotFound, "legal document not found")
+		return
+	}
+	if err != nil {
+		h.logger.Error("admin_update_legal_document_failed", "error", err, "doc_type", docType)
+		response.Error(w, http.StatusInternalServerError, "failed to update legal document")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, toLegalDocumentResponseBody(doc))
+}
+
+func (h *Handler) GetTerms(w http.ResponseWriter, r *http.Request) {
+	h.getLegalDocument(w, r, metadata.LegalDocTerms)
+}
+
+func (h *Handler) UpdateTerms(w http.ResponseWriter, r *http.Request) {
+	h.updateLegalDocument(w, r, metadata.LegalDocTerms)
+}
+
+func (h *Handler) GetPrivacy(w http.ResponseWriter, r *http.Request) {
+	h.getLegalDocument(w, r, metadata.LegalDocPrivacy)
+}
+
+func (h *Handler) UpdatePrivacy(w http.ResponseWriter, r *http.Request) {
+	h.updateLegalDocument(w, r, metadata.LegalDocPrivacy)
+}
+
 func extractBearerToken(r *http.Request) string {
 	const prefix = "Bearer "
 	auth := r.Header.Get("Authorization")

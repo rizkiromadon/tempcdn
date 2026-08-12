@@ -13,6 +13,7 @@ import (
 	"github.com/rizkiromadon/tempcdn/internal/config"
 	"github.com/rizkiromadon/tempcdn/internal/file"
 	"github.com/rizkiromadon/tempcdn/internal/httpserver"
+	"github.com/rizkiromadon/tempcdn/internal/legal"
 	"github.com/rizkiromadon/tempcdn/internal/logger"
 	"github.com/rizkiromadon/tempcdn/internal/metadata"
 	"github.com/rizkiromadon/tempcdn/internal/nodestatus"
@@ -75,6 +76,12 @@ func main() {
 		log.Error("failed to load upload settings", "error", err)
 		os.Exit(1)
 	}
+
+	if err := admin.SeedLegalDocuments(rootCtx, repository); err != nil {
+		log.Error("failed to seed legal documents", "error", err)
+		os.Exit(1)
+	}
+	legalHandler := legal.NewHandler(repository)
 
 	objectStorage, err := storage.NewR2Client(rootCtx, storage.R2ClientConfig{
 		AccessKeyID:     cfg.R2AccessKeyID,
@@ -178,6 +185,7 @@ func main() {
 		ConfigHandler:     configHandler,
 		StatsHandler:      statsHandler,
 		NodeStatusHandler: nodeStatusHandler,
+		LegalHandler:      legalHandler,
 		AdminHandler:      adminHandler,
 		AdminService:      adminService,
 		AllowedOrigin:     cfg.AllowedOrigin,

@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rizkiromadon/tempcdn/internal/admin"
 	"github.com/rizkiromadon/tempcdn/internal/file"
+	"github.com/rizkiromadon/tempcdn/internal/legal"
 	"github.com/rizkiromadon/tempcdn/internal/nodestatus"
 	"github.com/rizkiromadon/tempcdn/internal/response"
 	"github.com/rizkiromadon/tempcdn/internal/stats"
@@ -23,6 +24,7 @@ type RouterDependencies struct {
 	ConfigHandler     *upload.ConfigHandler
 	StatsHandler      *stats.Handler
 	NodeStatusHandler *nodestatus.Handler
+	LegalHandler      *legal.Handler
 	AdminHandler      *admin.Handler
 	AdminService      *admin.Service
 	AllowedOrigin     string
@@ -65,6 +67,9 @@ func NewRouter(deps RouterDependencies) http.Handler {
 		apiReg.route(apiRouter, origin, http.MethodGet, "/stats", deps.StatsHandler.ServeHTTP)
 		apiReg.route(apiRouter, origin, http.MethodGet, "/nodes", deps.NodeStatusHandler.ServeHTTP)
 
+		apiReg.route(apiRouter, origin, http.MethodGet, "/legal/terms", deps.LegalHandler.Terms)
+		apiReg.route(apiRouter, origin, http.MethodGet, "/legal/privacy", deps.LegalHandler.Privacy)
+
 		requireAdmin := admin.RequireAdminSession(deps.AdminService, deps.Logger)
 
 		apiRouter.Route("/admin", func(adminRouter chi.Router) {
@@ -79,6 +84,11 @@ func NewRouter(deps RouterDependencies) http.Handler {
 
 			adminReg.route(adminRouter, origin, http.MethodGet, "/upload-settings", deps.AdminHandler.GetUploadSettings, requireAdmin)
 			adminReg.route(adminRouter, origin, http.MethodPut, "/upload-settings", deps.AdminHandler.UpdateUploadSettings, requireAdmin)
+
+			adminReg.route(adminRouter, origin, http.MethodGet, "/legal/terms", deps.AdminHandler.GetTerms, requireAdmin)
+			adminReg.route(adminRouter, origin, http.MethodPut, "/legal/terms", deps.AdminHandler.UpdateTerms, requireAdmin)
+			adminReg.route(adminRouter, origin, http.MethodGet, "/legal/privacy", deps.AdminHandler.GetPrivacy, requireAdmin)
+			adminReg.route(adminRouter, origin, http.MethodPut, "/legal/privacy", deps.AdminHandler.UpdatePrivacy, requireAdmin)
 		})
 	})
 

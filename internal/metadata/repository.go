@@ -84,6 +84,7 @@ type Repository interface {
 	AdminRepository
 	APIKeyRepository
 	UploadSettingsRepository
+	LegalDocumentRepository
 
 	Migrate(ctx context.Context) error
 	Close() error

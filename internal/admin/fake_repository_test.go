@@ -19,6 +19,7 @@ type fakeRepository struct {
 	apiKeysByHash    map[string]*metadata.APIKey
 	apiKeysByID      map[string]*metadata.APIKey
 	uploadSettings   *metadata.UploadSettings
+	legalDocuments   map[string]*metadata.LegalDocument
 
 	insertAdminErr        error
 	insertAdminSessionErr error
@@ -32,6 +33,7 @@ func newFakeRepository() *fakeRepository {
 		sessionsByHash:   make(map[string]*metadata.AdminSession),
 		apiKeysByHash:    make(map[string]*metadata.APIKey),
 		apiKeysByID:      make(map[string]*metadata.APIKey),
+		legalDocuments:   make(map[string]*metadata.LegalDocument),
 	}
 }
 
@@ -199,4 +201,37 @@ func (f *fakeRepository) UpdateUploadSettings(ctx context.Context, settings *met
 	copyOfSettings.UpdatedBy = &updatedBy
 	f.uploadSettings = &copyOfSettings
 	return nil
+}
+
+func (f *fakeRepository) GetLegalDocument(ctx context.Context, docType string) (*metadata.LegalDocument, error) {
+	doc, exists := f.legalDocuments[docType]
+	if !exists {
+		return nil, metadata.ErrLegalDocumentNotFound
+	}
+	copyOfDoc := *doc
+	return &copyOfDoc, nil
+}
+
+func (f *fakeRepository) SeedLegalDocumentIfMissing(ctx context.Context, doc *metadata.LegalDocument) error {
+	if _, exists := f.legalDocuments[doc.DocType]; exists {
+		return nil
+	}
+	copyOfDoc := *doc
+	f.legalDocuments[doc.DocType] = &copyOfDoc
+	return nil
+}
+
+func (f *fakeRepository) UpdateLegalDocument(ctx context.Context, docType, content, updatedBy string, now time.Time) (*metadata.LegalDocument, error) {
+	if _, exists := f.legalDocuments[docType]; !exists {
+		return nil, metadata.ErrLegalDocumentNotFound
+	}
+	updated := &metadata.LegalDocument{
+		DocType:   docType,
+		Content:   content,
+		UpdatedAt: now,
+		UpdatedBy: &updatedBy,
+	}
+	copyOfDoc := *updated
+	f.legalDocuments[docType] = &copyOfDoc
+	return updated, nil
 }

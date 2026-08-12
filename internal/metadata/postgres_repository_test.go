@@ -205,3 +205,69 @@ func TestPostgresUpdateUploadSettingsFailsWhenRowMissing(t *testing.T) {
 		t.Fatalf("expected ErrUploadSettingsNotFound, got %v", err)
 	}
 }
+
+func TestPostgresSeedLegalDocumentIfMissingIsIdempotent(t *testing.T) {
+	repo := newTestPostgresRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.pool.Exec(ctx, `DELETE FROM legal_documents WHERE doc_type = $1`, LegalDocTerms); err != nil {
+		t.Fatalf("failed to clear legal_documents row: %v", err)
+	}
+
+	first := &LegalDocument{
+		DocType:   LegalDocTerms,
+		Content:   "Default terms.",
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := repo.SeedLegalDocumentIfMissing(ctx, first); err != nil {
+		t.Fatalf("first seed failed: %v", err)
+	}
+
+	changedNow := time.Now().UTC()
+	if _, err := repo.UpdateLegalDocument(ctx, LegalDocTerms, "Admin-edited terms.", "test-admin-id", changedNow); err != nil {
+		t.Fatalf("update after seed failed: %v", err)
+	}
+
+	if err := repo.SeedLegalDocumentIfMissing(ctx, first); err != nil {
+		t.Fatalf("second seed (simulating a restart) failed: %v", err)
+	}
+
+	got, err := repo.GetLegalDocument(ctx, LegalDocTerms)
+	if err != nil {
+		t.Fatalf("get legal document failed: %v", err)
+	}
+	if got.Content != "Admin-edited terms." {
+		t.Errorf("expected admin-changed content to survive re-seed, got %q", got.Content)
+	}
+	if got.UpdatedBy == nil || *got.UpdatedBy != "test-admin-id" {
+		t.Errorf("expected updated_by to still reflect the admin change, got %v", got.UpdatedBy)
+	}
+}
+
+func TestPostgresUpdateLegalDocumentFailsWhenRowMissing(t *testing.T) {
+	repo := newTestPostgresRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.pool.Exec(ctx, `DELETE FROM legal_documents WHERE doc_type = $1`, LegalDocPrivacy); err != nil {
+		t.Fatalf("failed to clear legal_documents row: %v", err)
+	}
+
+	_, err := repo.UpdateLegalDocument(ctx, LegalDocPrivacy, "New content.", "test-admin-id", time.Now().UTC())
+	if !errors.Is(err, ErrLegalDocumentNotFound) {
+		t.Fatalf("expected ErrLegalDocumentNotFound, got %v", err)
+	}
+}
+
+func TestPostgresGetLegalDocumentFailsWhenRowMissing(t *testing.T) {
+	repo := newTestPostgresRepository(t)
+	ctx := context.Background()
+
+	if _, err := repo.pool.Exec(ctx, `DELETE FROM legal_documents WHERE doc_type = $1`, LegalDocPrivacy); err != nil {
+		t.Fatalf("failed to clear legal_documents row: %v", err)
+	}
+
+	_, err := repo.GetLegalDocument(ctx, LegalDocPrivacy)
+	if !errors.Is(err, ErrLegalDocumentNotFound) {
+		t.Fatalf("expected ErrLegalDocumentNotFound, got %v", err)
+	}
+}

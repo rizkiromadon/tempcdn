@@ -31,6 +31,7 @@ type ServiceRepository interface {
 	metadata.AdminRepository
 	metadata.APIKeyRepository
 	metadata.UploadSettingsRepository
+	metadata.LegalDocumentRepository
 }
 
 type Service struct {
@@ -296,3 +297,37 @@ func normalizeStringList(values []string) []string {
 }
 
 const dummyPasswordHash = "$2a$12$CwTycUXWue0Thq9StjUM0uJ8p1M4gk1EYr9y7Wz4qOfNaqCzWn9E."
+
+var ErrInvalidLegalDocType = errors.New("invalid legal document type")
+
+var ErrLegalDocumentContentEmpty = errors.New("legal document content must not be empty")
+
+func isValidLegalDocType(docType string) bool {
+	return docType == metadata.LegalDocTerms || docType == metadata.LegalDocPrivacy
+}
+
+func (s *Service) GetLegalDocument(ctx context.Context, docType string) (*metadata.LegalDocument, error) {
+	if !isValidLegalDocType(docType) {
+		return nil, ErrInvalidLegalDocType
+	}
+	doc, err := s.repository.GetLegalDocument(ctx, docType)
+	if err != nil {
+		return nil, fmt.Errorf("get legal document: %w", err)
+	}
+	return doc, nil
+}
+
+func (s *Service) UpdateLegalDocument(ctx context.Context, docType, content, adminID string) (*metadata.LegalDocument, error) {
+	if !isValidLegalDocType(docType) {
+		return nil, ErrInvalidLegalDocType
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil, ErrLegalDocumentContentEmpty
+	}
+
+	doc, err := s.repository.UpdateLegalDocument(ctx, docType, content, adminID, s.now())
+	if err != nil {
+		return nil, fmt.Errorf("update legal document: %w", err)
+	}
+	return doc, nil
+}

@@ -320,3 +320,117 @@ func TestUpdateUploadSettingsTrimsAndDropsEmptyEntries(t *testing.T) {
 		t.Errorf("expected trimmed, non-empty blocked extensions [.exe], got %v", updated.BlockedExtensions)
 	}
 }
+
+func seedTestLegalDocuments(t *testing.T, repo *fakeRepository) {
+	t.Helper()
+	now := time.Now().UTC()
+	if err := repo.SeedLegalDocumentIfMissing(context.Background(), &metadata.LegalDocument{
+		DocType:   metadata.LegalDocTerms,
+		Content:   "Default terms.",
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("failed to seed terms document: %v", err)
+	}
+	if err := repo.SeedLegalDocumentIfMissing(context.Background(), &metadata.LegalDocument{
+		DocType:   metadata.LegalDocPrivacy,
+		Content:   "Default privacy policy.",
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("failed to seed privacy document: %v", err)
+	}
+}
+
+func TestGetLegalDocumentReturnsSeededValues(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestLegalDocuments(t, repo)
+	svc := NewService(repo)
+
+	doc, err := svc.GetLegalDocument(context.Background(), metadata.LegalDocTerms)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if doc.Content != "Default terms." {
+		t.Errorf("expected default terms content, got %q", doc.Content)
+	}
+	if doc.UpdatedBy != nil {
+		t.Errorf("expected nil updated_by for seeded document, got %v", doc.UpdatedBy)
+	}
+}
+
+func TestGetLegalDocumentRejectsUnknownDocType(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestLegalDocuments(t, repo)
+	svc := NewService(repo)
+
+	_, err := svc.GetLegalDocument(context.Background(), "refund-policy")
+	if !errors.Is(err, ErrInvalidLegalDocType) {
+		t.Errorf("expected ErrInvalidLegalDocType for unknown doc type, got %v", err)
+	}
+}
+
+func TestUpdateLegalDocumentPersistsAndStampsUpdatedBy(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestLegalDocuments(t, repo)
+	svc := NewService(repo)
+	admin := newTestAdmin(t, repo, "alice", "correct-horse-battery-staple")
+
+	updated, err := svc.UpdateLegalDocument(context.Background(), metadata.LegalDocPrivacy, "New privacy policy text.", admin.ID)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if updated.Content != "New privacy policy text." {
+		t.Errorf("expected updated content, got %q", updated.Content)
+	}
+	if updated.UpdatedBy == nil || *updated.UpdatedBy != admin.ID {
+		t.Errorf("expected updated_by=%s, got %v", admin.ID, updated.UpdatedBy)
+	}
+
+	got, err := svc.GetLegalDocument(context.Background(), metadata.LegalDocPrivacy)
+	if err != nil {
+		t.Fatalf("expected no error re-reading document, got %v", err)
+	}
+	if got.Content != "New privacy policy text." {
+		t.Errorf("expected persisted content, got %q", got.Content)
+	}
+
+	// The other document must be untouched.
+	terms, err := svc.GetLegalDocument(context.Background(), metadata.LegalDocTerms)
+	if err != nil {
+		t.Fatalf("expected no error reading terms, got %v", err)
+	}
+	if terms.Content != "Default terms." {
+		t.Errorf("expected terms document to be unaffected, got %q", terms.Content)
+	}
+}
+
+func TestUpdateLegalDocumentRejectsUnknownDocType(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestLegalDocuments(t, repo)
+	svc := NewService(repo)
+
+	_, err := svc.UpdateLegalDocument(context.Background(), "refund-policy", "content", "admin-id")
+	if !errors.Is(err, ErrInvalidLegalDocType) {
+		t.Errorf("expected ErrInvalidLegalDocType for unknown doc type, got %v", err)
+	}
+}
+
+func TestUpdateLegalDocumentRejectsEmptyContent(t *testing.T) {
+	repo := newFakeRepository()
+	seedTestLegalDocuments(t, repo)
+	svc := NewService(repo)
+
+	_, err := svc.UpdateLegalDocument(context.Background(), metadata.LegalDocTerms, "   ", "admin-id")
+	if !errors.Is(err, ErrLegalDocumentContentEmpty) {
+		t.Errorf("expected ErrLegalDocumentContentEmpty for whitespace-only content, got %v", err)
+	}
+}
+
+func TestGetLegalDocumentNotFoundWhenUnseeded(t *testing.T) {
+	repo := newFakeRepository()
+	svc := NewService(repo)
+
+	_, err := svc.GetLegalDocument(context.Background(), metadata.LegalDocTerms)
+	if !errors.Is(err, metadata.ErrLegalDocumentNotFound) {
+		t.Errorf("expected ErrLegalDocumentNotFound when unseeded, got %v", err)
+	}
+}
