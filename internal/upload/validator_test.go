@@ -70,11 +70,6 @@ func TestDetectAndValidateContentTypeAcceptsExactMatch(t *testing.T) {
 	}
 }
 
-// TestUpdateTakesEffectImmediately guards the core promise behind runtime-
-// configurable upload settings (see admin.Handler.UpdateUploadSettings and
-// main.go's SetUploadSettingsUpdatedCallback wiring): a call to Update
-// must be visible to the very next validation call on the same Validator,
-// with no restart or additional synchronization required by the caller.
 func TestUpdateTakesEffectImmediately(t *testing.T) {
 	validator := NewValidator(100, []string{"image/*"}, []string{".exe"})
 
@@ -89,9 +84,6 @@ func TestUpdateTakesEffectImmediately(t *testing.T) {
 	}
 }
 
-// TestUpdateReplacesRulesAtomically guards against a caller-visible
-// half-updated state: every field read back via Snapshot after Update must
-// come from the same Update call, never a mix of an old and new value.
 func TestUpdateReplacesRulesAtomically(t *testing.T) {
 	validator := NewValidator(100, []string{"image/*"}, []string{".exe"})
 
@@ -109,15 +101,12 @@ func TestUpdateReplacesRulesAtomically(t *testing.T) {
 	}
 }
 
-// TestUpdateDoesNotAliasCallerSlice guards against a caller's slice being
-// captured by reference: mutating the slice passed to Update after the
-// call must not retroactively change the rules already stored.
 func TestUpdateDoesNotAliasCallerSlice(t *testing.T) {
 	validator := NewValidator(100, []string{"image/*"}, []string{".exe"})
 
 	allowed := []string{"application/pdf"}
 	validator.Update(100, allowed, nil)
-	allowed[0] = "image/*" // mutate after the call
+	allowed[0] = "image/*"
 
 	_, snapshotAllowed, _ := validator.Snapshot()
 	if snapshotAllowed[0] != "application/pdf" {

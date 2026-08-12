@@ -11,20 +11,14 @@ import (
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tempcdn/tempcdn/internal/metadata"
-	"github.com/tempcdn/tempcdn/internal/ratelimit"
-	"github.com/tempcdn/tempcdn/internal/response"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/ratelimit"
+	"github.com/rizkiromadon/tempcdn/internal/response"
 )
 
 type Handler struct {
 	service *Service
-	// validator is consulted for the current max upload size on every
-	// request (via Validator.Snapshot), rather than a size baked in at
-	// NewHandler time, so that an admin raising or lowering the limit
-	// through PUT /api/v1/admin/upload-settings takes effect on the very
-	// next upload - including the MaxBytesReader cap below, which has to
-	// be enforced before the body is even read, not just in
-	// Service.Upload's later ValidateSize call.
+
 	validator          *Validator
 	concurrencyLimiter *ratelimit.ConcurrencyLimiter
 	ipHashSalt         string
@@ -58,9 +52,7 @@ type uploadResponseBody struct {
 	CreatedAt      string `json:"created_at"`
 	ExpiresAt      string `json:"expires_at"`
 	Duplicate      bool   `json:"duplicate"`
-	// DeleteToken authorizes DELETE /api/v1/files/{id}. It is shown only
-	// once, in this response, and is empty for duplicate uploads (the
-	// original uploader already holds the real one).
+
 	DeleteToken string `json:"delete_token,omitempty"`
 }
 
@@ -113,12 +105,6 @@ func writeUploadError(logger *slog.Logger, w http.ResponseWriter, err error) {
 		return
 	}
 
-	// metadata.ErrFileNotFound is the *expected*, non-error outcome of the
-	// dedup lookup inside Service.Upload (it means "not a duplicate,
-	// proceed") and is handled internally there - it is never itself
-	// returned as Upload's error. This check is defensive only, guarding
-	// against a future refactor accidentally letting it leak through; if it
-	// ever fires, that's a bug worth knowing about, so it's logged as one.
 	if errors.Is(err, metadata.ErrFileNotFound) {
 		if logger != nil {
 			logger.Error("unexpected_err_file_not_found_in_upload_path", "error", err)
@@ -133,10 +119,6 @@ func writeUploadError(logger *slog.Logger, w http.ResponseWriter, err error) {
 		return
 	}
 
-	// Anything else (temp file creation, storage puts, DB writes, the
-	// spooled-vs-declared size mismatch) is an internal/infra failure, not
-	// the client's fault - don't leak raw Go error text (temp paths, driver
-	// messages) and don't mislabel it as a 400.
 	if logger != nil {
 		logger.Error("upload_failed", "error", err)
 	}

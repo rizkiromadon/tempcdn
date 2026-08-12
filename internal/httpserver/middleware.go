@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tempcdn/tempcdn/internal/response"
+	"github.com/rizkiromadon/tempcdn/internal/response"
 )
 
 type responseRecorder struct {
@@ -62,12 +62,7 @@ func Recovery(logger *slog.Logger) func(http.Handler) http.Handler {
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					logger.Error("panic_recovered", "error", recovered, "path", r.URL.Path)
-					// If the handler already wrote a status/body before
-					// panicking, headers are already sent and we can't
-					// change them - writing again would just log a
-					// harmless "superfluous WriteHeader" warning and have
-					// no effect. Only emit the documented error body when
-					// nothing has been written yet.
+
 					if !recorder.wroteHeader {
 						response.Error(recorder, http.StatusInternalServerError, "internal server error")
 					}
@@ -78,10 +73,6 @@ func Recovery(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// CORS returns a middleware that sets CORS headers for the given allowedOrigin
-// and the given list of allowed methods (OPTIONS is always included for preflight).
-// allowedOrigin must be non-empty; callers should validate configuration at
-// startup (see config.Config.validate) rather than silently omitting the header.
 func CORS(allowedOrigin string, methods string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

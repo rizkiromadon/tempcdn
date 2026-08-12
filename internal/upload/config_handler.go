@@ -3,7 +3,7 @@ package upload
 import (
 	"net/http"
 
-	"github.com/tempcdn/tempcdn/internal/response"
+	"github.com/rizkiromadon/tempcdn/internal/response"
 )
 
 type ConfigResponse struct {
@@ -14,12 +14,6 @@ type ConfigResponse struct {
 	FileTTLHours       int      `json:"file_ttl_hours"`
 }
 
-// ConfigHandler serves the public, read-only GET /api/v1/config endpoint.
-// It reads live values from the shared Validator (see Validator.Snapshot)
-// rather than values fixed at startup, so this endpoint always reflects
-// whatever an admin most recently set via PUT
-// /api/v1/admin/upload-settings, without needing its own copy of the
-// current settings or a restart to pick up a change.
 type ConfigHandler struct {
 	validator    *Validator
 	fileTTLHours int

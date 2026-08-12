@@ -6,13 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/idgen"
+	"github.com/rizkiromadon/tempcdn/internal/idgen"
 )
 
-// newTestPostgresRepositoryWithAdmins is like newTestPostgresRepository but
-// also truncates the admin tables, since most tests in this file need a
-// clean slate for admins/admin_sessions specifically (TRUNCATE ... CASCADE
-// on admins also clears admin_sessions, since it references admins.id).
 func newTestPostgresRepositoryWithAdmins(t *testing.T) *PostgresRepository {
 	t.Helper()
 	repo := newTestPostgresRepository(t)
@@ -182,8 +178,6 @@ func TestPostgresAdminSessionLifecycle(t *testing.T) {
 	}
 }
 
-// TestPostgresDeleteAdminSessionIsIdempotent guards logout being safe to
-// call twice (or on a token that was never valid) without erroring.
 func TestPostgresDeleteAdminSessionIsIdempotent(t *testing.T) {
 	repo := newTestPostgresRepositoryWithAdmins(t)
 	ctx := context.Background()
@@ -193,9 +187,6 @@ func TestPostgresDeleteAdminSessionIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestPostgresDeleteExpiredAdminSessionsOnlyRemovesExpired guards that the
-// janitor's bulk cleanup query doesn't accidentally sweep up still-valid
-// sessions alongside expired ones.
 func TestPostgresDeleteExpiredAdminSessionsOnlyRemovesExpired(t *testing.T) {
 	repo := newTestPostgresRepositoryWithAdmins(t)
 	ctx := context.Background()
@@ -239,9 +230,6 @@ func TestPostgresDeleteExpiredAdminSessionsOnlyRemovesExpired(t *testing.T) {
 	}
 }
 
-// TestPostgresAdminSessionCascadeDeletesWhenAdminDeleted guards the
-// ON DELETE CASCADE foreign key on admin_sessions.admin_id: removing an
-// admin account must not leave orphaned session rows behind.
 func TestPostgresAdminSessionCascadeDeletesWhenAdminDeleted(t *testing.T) {
 	repo := newTestPostgresRepositoryWithAdmins(t)
 	ctx := context.Background()

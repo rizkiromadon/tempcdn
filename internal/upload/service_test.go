@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/metadata"
-	"github.com/tempcdn/tempcdn/internal/storage"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/storage"
 )
 
 type mockObjectStorage struct {
@@ -33,9 +33,6 @@ type mockRepository struct {
 	recordsByChecksum map[string]*metadata.FileRecord
 	insertedRecords   []*metadata.FileRecord
 
-	// uploadSettings backs GetUploadSettings for tests that need it to
-	// return real data (e.g. SettingsSynchronizer tests), rather than the
-	// hardcoded ErrUploadSettingsNotFound below. nil means "not seeded".
 	uploadSettings *metadata.UploadSettings
 }
 

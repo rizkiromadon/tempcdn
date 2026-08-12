@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tempcdn/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -75,13 +75,6 @@ func TestBootstrapFailsWhenPasswordTooShort(t *testing.T) {
 	}
 }
 
-// TestBootstrapTreatsUsernameCollisionAsSuccessNotFailure guards the
-// srv1/srv2/srv3-booting-together scenario: if InsertAdmin reports
-// ErrAdminUsernameTaken (e.g. a concurrent peer's Bootstrap call won a
-// race and inserted an admin with this exact username after this call's
-// CountAdmins check but before its own InsertAdmin call), Bootstrap must
-// treat that as success rather than propagating a startup failure - the
-// goal ("at least one admin exists") is satisfied either way.
 func TestBootstrapTreatsUsernameCollisionAsSuccessNotFailure(t *testing.T) {
 	repo := newFakeRepository()
 	repo.insertAdminErr = metadata.ErrAdminUsernameTaken
@@ -119,10 +112,6 @@ func TestSeedUploadSettingsCreatesRowWhenNoneExist(t *testing.T) {
 	}
 }
 
-// TestSeedUploadSettingsIsNoOpWhenRowAlreadyExists guards the same
-// restart-safety property as TestBootstrapIsNoOpWhenAdminsAlreadyExist: a
-// later boot with different env-var-derived defaults must not overwrite
-// settings an admin has since changed via Service.UpdateUploadSettings.
 func TestSeedUploadSettingsIsNoOpWhenRowAlreadyExists(t *testing.T) {
 	repo := newFakeRepository()
 
@@ -134,7 +123,6 @@ func TestSeedUploadSettingsIsNoOpWhenRowAlreadyExists(t *testing.T) {
 		t.Fatalf("first seed failed: %v", err)
 	}
 
-	// Simulate an admin having since changed the settings.
 	repo.uploadSettings.MaxUploadSizeMB = 999
 
 	if err := SeedUploadSettings(context.Background(), repo, UploadSettingsDefaults{

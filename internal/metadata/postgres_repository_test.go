@@ -10,10 +10,6 @@ import (
 	"time"
 )
 
-// sampleRecord builds a minimal, valid *FileRecord for tests that only
-// care about expiry/ID/checksum behavior (e.g. FindExpired), filling every
-// other field with an arbitrary-but-valid placeholder so Insert succeeds
-// against the real files table's NOT NULL constraints.
 func sampleRecord(id, checksum string, createdAt time.Time, ttl time.Duration) *FileRecord {
 	return &FileRecord{
 		ID:              id,
@@ -30,14 +26,6 @@ func sampleRecord(id, checksum string, createdAt time.Time, ttl time.Duration) *
 	}
 }
 
-// newTestPostgresRepository connects to TEST_POSTGRES_DSN and returns a
-// PostgresRepository with a clean "files" table, or skips the test if
-// TEST_POSTGRES_DSN is unset. This keeps `go test ./...` green in
-// environments without a Postgres instance available (e.g. most local dev
-// machines and the default CI job), while still letting a Postgres-backed
-// job run these tests against a real database - e.g.:
-//
-//	TEST_POSTGRES_DSN="postgres://tempcdn:tempcdn@localhost:5432/tempcdn_test?sslmode=disable" go test ./internal/metadata/...
 func newTestPostgresRepository(t *testing.T) *PostgresRepository {
 	t.Helper()
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
@@ -54,10 +42,7 @@ func newTestPostgresRepository(t *testing.T) *PostgresRepository {
 		repo.Close()
 		t.Fatalf("failed to migrate test postgres: %v", err)
 	}
-	// Each test starts from an empty table rather than a fresh database,
-	// since standing up/tearing down a database per test is unnecessary
-	// overhead here - schema_migrations is left alone so Migrate() isn't
-	// re-run from scratch on every test.
+
 	if _, err := repo.pool.Exec(ctx, `TRUNCATE TABLE files`); err != nil {
 		repo.Close()
 		t.Fatalf("failed to truncate files table: %v", err)
@@ -67,10 +52,6 @@ func newTestPostgresRepository(t *testing.T) *PostgresRepository {
 	return repo
 }
 
-// TestPostgresMigrateIsIdempotent guards against a real regression that
-// shipped once already: Migrate() must be safe to call again on every
-// process restart, since a restart of the server is exactly the scenario
-// that would hit this.
 func TestPostgresMigrateIsIdempotent(t *testing.T) {
 	repo := newTestPostgresRepository(t)
 	ctx := context.Background()
@@ -80,11 +61,6 @@ func TestPostgresMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestPostgresMigrateConcurrentStartupIsSafe simulates srv1/srv2/srv3 all
-// starting up against the same fresh database at once: every instance
-// calls Migrate() concurrently, and the advisory lock in Migrate() must
-// serialize them so the migration is applied exactly once and none of the
-// concurrent callers error out.
 func TestPostgresMigrateConcurrentStartupIsSafe(t *testing.T) {
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -95,11 +71,7 @@ func TestPostgresMigrateConcurrentStartupIsSafe(t *testing.T) {
 	const instanceCount = 5
 	repos := make([]*PostgresRepository, instanceCount)
 	for i := range repos {
-		// maxConns=1 per simulated instance here: this test only needs
-		// each one to issue a handful of sequential statements, and 5
-		// instances x a larger pool each risks tripping the same
-		// connection-slot limits this size cap exists to avoid in the
-		// first place (see NewPostgresRepository).
+
 		repo, err := NewPostgresRepository(ctx, dsn, 1)
 		if err != nil {
 			t.Fatalf("failed to connect instance %d: %v", i, err)
@@ -126,12 +98,6 @@ func TestPostgresMigrateConcurrentStartupIsSafe(t *testing.T) {
 	}
 }
 
-// TestPostgresFindExpiredSkipsRowsLockedByAnotherSweeper is the key
-// correctness property motivating FOR UPDATE SKIP LOCKED: if two sweepers
-// (e.g. running on srv1 and srv2) call FindExpired concurrently within an
-// overlapping transaction window, they must not both receive the same
-// expired row, or both would attempt to delete the same R2 object and DB
-// record.
 func TestPostgresFindExpiredSkipsRowsLockedByAnotherSweeper(t *testing.T) {
 	repo := newTestPostgresRepository(t)
 	ctx := context.Background()
@@ -140,18 +106,12 @@ func TestPostgresFindExpiredSkipsRowsLockedByAnotherSweeper(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		id := fmt.Sprintf("id-expired-%d", i)
-		record := sampleRecord(id, "checksum-"+id, past, 1*time.Minute) // already expired
+		record := sampleRecord(id, "checksum-"+id, past, 1*time.Minute)
 		if err := repo.Insert(ctx, record); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
-	// Hold a transaction open with FOR UPDATE SKIP LOCKED still in effect
-	// by driving two FindExpired calls concurrently and confirming their
-	// results don't overlap. Since FindExpired commits internally, we
-	// instead directly exercise two goroutines racing to claim from the
-	// same 10-row pool with a small limit each, repeated enough times that
-	// an overlap would show up if SKIP LOCKED weren't working.
 	const perCallLimit = 5
 	var wg sync.WaitGroup
 	results := make([][]*FileRecord, 2)
@@ -184,11 +144,6 @@ func TestPostgresFindExpiredSkipsRowsLockedByAnotherSweeper(t *testing.T) {
 	}
 }
 
-// TestPostgresSeedUploadSettingsIfMissingIsIdempotent guards the same
-// restart scenario as TestPostgresMigrateIsIdempotent, but for the
-// upload_settings row: a later boot with different env-var-derived
-// defaults must not silently overwrite settings an admin has since
-// changed via UpdateUploadSettings.
 func TestPostgresSeedUploadSettingsIfMissingIsIdempotent(t *testing.T) {
 	repo := newTestPostgresRepository(t)
 	ctx := context.Background()
@@ -207,7 +162,6 @@ func TestPostgresSeedUploadSettingsIfMissingIsIdempotent(t *testing.T) {
 		t.Fatalf("first seed failed: %v", err)
 	}
 
-	// Simulate an admin changing settings after the initial seed.
 	changedNow := time.Now().UTC()
 	changed := &UploadSettings{
 		MaxUploadSizeMB:   250,
@@ -218,9 +172,6 @@ func TestPostgresSeedUploadSettingsIfMissingIsIdempotent(t *testing.T) {
 		t.Fatalf("update after seed failed: %v", err)
 	}
 
-	// A later "boot" seeding with the original defaults again must be a
-	// no-op, since the row now exists (see the ON CONFLICT DO NOTHING in
-	// SeedUploadSettingsIfMissing).
 	if err := repo.SeedUploadSettingsIfMissing(ctx, first); err != nil {
 		t.Fatalf("second seed (simulating a restart) failed: %v", err)
 	}
@@ -237,9 +188,6 @@ func TestPostgresSeedUploadSettingsIfMissingIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestPostgresUpdateUploadSettingsFailsWhenRowMissing guards
-// UpdateUploadSettings' documented ErrUploadSettingsNotFound behavior: it
-// must not silently insert a row, only update an existing one.
 func TestPostgresUpdateUploadSettingsFailsWhenRowMissing(t *testing.T) {
 	repo := newTestPostgresRepository(t)
 	ctx := context.Background()

@@ -1,8 +1,4 @@
-// Package sweeper implements the application-level enforcement of file
-// expiry. An R2 Lifecycle Rule can additionally be configured on the bucket
-// as defense-in-depth, but this package is the primary, verifiable mechanism
-// that keeps the "temporary" promise of the CDN: nothing in this repo should
-// depend on an external, unchecked dashboard setting for its core behavior.
+
 package sweeper
 
 import (
@@ -11,14 +7,11 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/cloudflare"
-	"github.com/tempcdn/tempcdn/internal/metadata"
-	"github.com/tempcdn/tempcdn/internal/storage"
+	"github.com/rizkiromadon/tempcdn/internal/cloudflare"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/storage"
 )
 
-// batchSize caps how many expired records are processed per tick, so a large
-// backlog (e.g. after downtime) doesn't hold a database connection for an
-// unbounded amount of time in one query.
 const batchSize = 100
 
 type Sweeper struct {
@@ -41,15 +34,10 @@ func New(repository metadata.Repository, objectStorage storage.ObjectStorage, ca
 	}
 }
 
-// Run blocks, sweeping expired files every interval until ctx is cancelled.
-// Call this in its own goroutine.
 func (s *Sweeper) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
-	// Run an initial sweep immediately on startup rather than waiting a
-	// full interval, so files that expired while the server was down
-	// don't linger unnecessarily.
 	s.sweepOnce(ctx)
 
 	for {
@@ -80,9 +68,7 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 	for _, record := range records {
 		if err := s.objectStorage.DeleteObject(ctx, record.ObjectKey); err != nil {
 			s.logger.Error("sweeper_delete_object_failed", "id", record.ID, "object_key", record.ObjectKey, "error", err)
-			// Don't delete the DB row if we couldn't confirm the object
-			// was removed from R2 - retry on the next tick instead of
-			// silently losing track of an object that's still live.
+
 			continue
 		}
 

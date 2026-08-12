@@ -4,14 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
 )
 
-// fakeRepository is an in-memory metadata.Repository stub covering only
-// the admin-related methods exercised by this package's tests. Every
-// other method panics if called, so an accidental dependency on
-// file/node-status behavior fails loudly rather than silently returning a
-// zero value.
 type fakeRepository struct {
 	adminsByUsername map[string]*metadata.Admin
 	adminsByID       map[string]*metadata.Admin

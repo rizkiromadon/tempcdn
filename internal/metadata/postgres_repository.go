@@ -14,23 +14,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed postgres_migrations/*.sql
 var postgresMigrationFiles embed.FS
 
-// postgresMigrationLockID is an arbitrary, fixed advisory lock key used to
-// serialize Migrate() across every server instance that starts up against
-// the same database at the same time (srv1/srv2/srv3 booting together,
-// e.g. on a fresh deploy). Without this, two instances could both see a
-// migration as "not yet applied" and race to run it. The value itself has
-// no meaning beyond being a stable constant unique to this application's
-// migration process.
 const postgresMigrationLockID = 72186_004
 
-// PostgresRepository is the sole Repository implementation, backed by
-// Postgres. It supports both a single standalone instance and deployments
-// that run more than one tempcdn instance (e.g. srv1/srv2/srv3 behind a
-// rotating/round-robin frontend) against a single shared database, so
-// metadata written by one instance is immediately visible to the others.
 type PostgresRepository struct {
 	pool *pgxpool.Pool
 }
@@ -40,14 +27,7 @@ func NewPostgresRepository(ctx context.Context, dsn string, maxConns int32) (*Po
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres dsn: %w", err)
 	}
-	// Cap pool size explicitly rather than relying on pgxpool's default
-	// (4 x NumCPU, minimum 4): managed Postgres providers (e.g. Aiven's
-	// smaller tiers) often reserve only a small number of non-superuser
-	// connection slots, and an uncapped pool - especially across a
-	// crash-loop where old connections haven't been cleaned up yet - can
-	// exhaust them, surfacing as "remaining connection slots are reserved
-	// for roles with the SUPERUSER attribute" on every subsequent
-	// connection attempt, including this one.
+
 	poolCfg.MaxConns = maxConns
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -60,10 +40,6 @@ func NewPostgresRepository(ctx context.Context, dsn string, maxConns int32) (*Po
 	return &PostgresRepository{pool: pool}, nil
 }
 
-// Migrate applies any postgres_migrations/*.sql files not yet recorded in
-// schema_migrations, in filename order, inside a single advisory lock so
-// that multiple instances starting concurrently against the same database
-// don't apply the same migration twice or race on schema_migrations itself.
 func (r *PostgresRepository) Migrate(ctx context.Context) error {
 	conn, err := r.pool.Acquire(ctx)
 	if err != nil {
@@ -71,10 +47,6 @@ func (r *PostgresRepository) Migrate(ctx context.Context) error {
 	}
 	defer conn.Release()
 
-	// pg_advisory_lock blocks until held, and is automatically released
-	// when the session ends or pg_advisory_unlock is called - using a
-	// session-level (not transaction-level) lock here is deliberate, so it
-	// stays held across the multiple statements below.
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, postgresMigrationLockID); err != nil {
 		return fmt.Errorf("acquire migration advisory lock: %w", err)
 	}
@@ -194,22 +166,12 @@ func (r *PostgresRepository) FindByID(ctx context.Context, id string) (*FileReco
 	return pgScanFileRecord(row)
 }
 
-// FindExpired returns up to limit expired records, for the background
-// expiry sweep. Because more than one instance (srv1/srv2/srv3) can run
-// this concurrently against the shared database, the select uses FOR
-// UPDATE SKIP LOCKED inside a transaction so that a row already claimed by
-// one instance's sweep tick is invisible to another instance's concurrent
-// sweep tick, rather than both instances trying to delete the same R2
-// object and DB row. The transaction is committed (not just read) before
-// returning, releasing the row locks once the caller has the records in
-// hand; the caller (sweeper.sweepOnce) is responsible for actually calling
-// DeleteByID once the R2 object is confirmed deleted.
 func (r *PostgresRepository) FindExpired(ctx context.Context, before time.Time, limit int) ([]*FileRecord, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin find-expired transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }() // no-op if already committed
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	const query = `
 		SELECT id, original_name, content_type, size_bytes, checksum_sha256,
@@ -240,14 +202,6 @@ func (r *PostgresRepository) FindExpired(ctx context.Context, before time.Time, 
 	}
 	rows.Close()
 
-	// Commit releases the row locks taken by FOR UPDATE. Rows returned here
-	// remain "claimed" only in the sense that no other transaction could
-	// see them as available during this query; once committed, another
-	// sweeper's *next* tick could theoretically re-select the same row if
-	// this instance fails to delete it in time - that's fine, since
-	// DeleteByID is idempotent (ErrFileNotFound is treated as success by
-	// the sweeper) and this only affects convergence speed, not
-	// correctness.
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit find-expired transaction: %w", err)
 	}
@@ -304,10 +258,6 @@ func (r *PostgresRepository) DeleteByID(ctx context.Context, id string) error {
 	return nil
 }
 
-// Heartbeat upserts this node's own row via INSERT ... ON CONFLICT, which
-// Postgres executes atomically - safe against another instance's
-// concurrent Heartbeat or MarkStaleOffline touching the same row, unlike a
-// separate SELECT-then-INSERT/UPDATE would be.
 func (r *PostgresRepository) Heartbeat(ctx context.Context, nodeID, hostname string, startedAt, now time.Time) error {
 	const query = `
 		INSERT INTO node_status (node_id, hostname, status, started_at, last_heartbeat_at, marked_offline_at)
@@ -325,12 +275,6 @@ func (r *PostgresRepository) Heartbeat(ctx context.Context, nodeID, hostname str
 	return nil
 }
 
-// MarkStaleOffline flips stale "online" rows to "offline" in one statement.
-// The WHERE status = 'online' guard, combined with Postgres's row-level
-// locking during the UPDATE, means that if two instances' janitor ticks
-// somehow overlap on the same row, only one of them actually performs the
-// flip - the other's UPDATE simply matches zero rows for that node_id, it
-// does not error or double-flip.
 func (r *PostgresRepository) MarkStaleOffline(ctx context.Context, before, now time.Time) ([]string, error) {
 	const query = `
 		UPDATE node_status
@@ -384,11 +328,6 @@ func (r *PostgresRepository) ListNodeStatus(ctx context.Context) ([]*NodeStatus,
 	return nodes, nil
 }
 
-// InsertAdmin creates a new admin account. The UNIQUE constraint on
-// admins.username is the actual race-safe guarantee (two concurrent
-// requests racing to create the same username); the pgErrCode check below
-// just translates that into the typed ErrAdminUsernameTaken rather than a
-// raw pgconn error leaking out of this package.
 func (r *PostgresRepository) InsertAdmin(ctx context.Context, admin *Admin) error {
 	const query = `
 		INSERT INTO admins (id, username, password_hash, created_at, last_login_at)
@@ -506,9 +445,6 @@ func (r *PostgresRepository) TouchAdminSession(ctx context.Context, tokenHash st
 	return nil
 }
 
-// DeleteAdminSession is idempotent: deleting zero rows (session already
-// gone) is not an error, since logout should succeed regardless of
-// whether the session had already expired or been revoked elsewhere.
 func (r *PostgresRepository) DeleteAdminSession(ctx context.Context, tokenHash string) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM admin_sessions WHERE token_hash = $1`, tokenHash)
 	if err != nil {
@@ -525,7 +461,6 @@ func (r *PostgresRepository) DeleteExpiredAdminSessions(ctx context.Context, bef
 	return nil
 }
 
-// InsertAPIKey creates a new API key row.
 func (r *PostgresRepository) InsertAPIKey(ctx context.Context, key *APIKey) error {
 	const query = `
 		INSERT INTO api_keys (id, name, token_hash, created_at, last_used_at, revoked_at)
@@ -596,10 +531,6 @@ func (r *PostgresRepository) TouchAPIKey(ctx context.Context, id string, now tim
 	return nil
 }
 
-// RevokeAPIKey is idempotent: revoking an already-revoked or nonexistent
-// key affects zero rows, which is not treated as an error, since the
-// caller's intent (this key must not authenticate anymore) is already
-// satisfied either way.
 func (r *PostgresRepository) RevokeAPIKey(ctx context.Context, id string, now time.Time) error {
 	_, err := r.pool.Exec(ctx, `UPDATE api_keys SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL`, id, now)
 	if err != nil {
@@ -608,7 +539,6 @@ func (r *PostgresRepository) RevokeAPIKey(ctx context.Context, id string, now ti
 	return nil
 }
 
-// GetUploadSettings reads the single upload_settings row (id = 1).
 func (r *PostgresRepository) GetUploadSettings(ctx context.Context) (*UploadSettings, error) {
 	const query = `
 		SELECT max_upload_size_mb, allowed_mime_types, blocked_extensions, updated_at, updated_by
@@ -626,10 +556,6 @@ func (r *PostgresRepository) GetUploadSettings(ctx context.Context) (*UploadSett
 	return settings, nil
 }
 
-// SeedUploadSettingsIfMissing inserts the id = 1 row only if it doesn't
-// already exist. updated_by is left NULL and updated_at set to now, since
-// this is a boot-time seed from environment variable defaults, not an
-// admin-initiated change.
 func (r *PostgresRepository) SeedUploadSettingsIfMissing(ctx context.Context, settings *UploadSettings) error {
 	allowedJSON, err := json.Marshal(settings.AllowedMimeTypes)
 	if err != nil {
@@ -651,10 +577,6 @@ func (r *PostgresRepository) SeedUploadSettingsIfMissing(ctx context.Context, se
 	return nil
 }
 
-// UpdateUploadSettings overwrites the id = 1 row. Returns
-// ErrUploadSettingsNotFound if no row exists yet (it should always have
-// been seeded at boot by SeedUploadSettingsIfMissing before any admin
-// request could reach this).
 func (r *PostgresRepository) UpdateUploadSettings(ctx context.Context, settings *UploadSettings, updatedBy string, now time.Time) error {
 	allowedJSON, err := json.Marshal(settings.AllowedMimeTypes)
 	if err != nil {
@@ -685,7 +607,6 @@ func (r *PostgresRepository) Close() error {
 	return nil
 }
 
-// pgRowScanner is satisfied by both pgx.Row and pgx.Rows.
 type pgRowScanner interface {
 	Scan(dest ...interface{}) error
 }
@@ -800,9 +721,6 @@ func pgScanAPIKeyRow(scanner pgRowScanner) (*APIKey, error) {
 	return &key, nil
 }
 
-// isUniqueViolation reports whether err is a Postgres unique constraint
-// violation (SQLSTATE 23505), e.g. from admins.username's UNIQUE
-// constraint.
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"

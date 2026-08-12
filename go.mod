@@ -1,4 +1,4 @@
-module github.com/tempcdn/tempcdn
+module github.com/rizkiromadon/tempcdn
 
 go 1.22
 

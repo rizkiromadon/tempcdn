@@ -9,12 +9,9 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tempcdn/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
 )
 
-// fakeRepository is a minimal metadata.Repository stub - only Stats is
-// exercised by this handler, so every other method is unused and panics if
-// ever called, to make an accidental dependency on them fail loudly.
 type fakeRepository struct {
 	stats    *metadata.Stats
 	statsErr error
@@ -164,11 +161,6 @@ func TestServeHTTPReturnsActiveAndLifetimeFigures(t *testing.T) {
 	}
 }
 
-// TestServeHTTPAverageIsZeroNotDivideByZeroWhenNoActiveFiles guards the
-// explicit zero-file branch in ServeHTTP: without it, ActiveBytes /
-// ActiveFileCount would panic with an integer divide-by-zero the moment the
-// CDN has no active files (e.g. right after startup, or once everything has
-// expired).
 func TestServeHTTPAverageIsZeroNotDivideByZeroWhenNoActiveFiles(t *testing.T) {
 	repo := &fakeRepository{
 		stats: &metadata.Stats{

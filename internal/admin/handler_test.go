@@ -10,7 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/tempcdn/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
 )
 
 func testLogger() *slog.Logger {
@@ -316,7 +316,7 @@ func TestHandlerUpdateUploadSettingsReturns400OnInvalidInput(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(updateUploadSettingsRequestBody{
-		MaxUploadSizeMB:   0, // invalid
+		MaxUploadSizeMB:   0,
 		AllowedMimeTypes:  []string{"image/*"},
 		BlockedExtensions: nil,
 	})

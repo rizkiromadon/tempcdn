@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/cloudflare"
-	"github.com/tempcdn/tempcdn/internal/idgen"
-	"github.com/tempcdn/tempcdn/internal/metadata"
-	"github.com/tempcdn/tempcdn/internal/storage"
+	"github.com/rizkiromadon/tempcdn/internal/cloudflare"
+	"github.com/rizkiromadon/tempcdn/internal/idgen"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/storage"
 )
 
 var ErrNotFound = errors.New("file not found")

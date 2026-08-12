@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/idgen"
-	"github.com/tempcdn/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/idgen"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -45,7 +45,6 @@ func TestLoginSucceedsWithCorrectCredentialsAndCreatesSession(t *testing.T) {
 		t.Errorf("expected admin username 'alice', got %q", result.Admin.Username)
 	}
 
-	// The token itself must never be persisted - only its hash.
 	if _, exists := repo.sessionsByHash[result.Token]; exists {
 		t.Error("plaintext token must not be usable as a stored hash key")
 	}
@@ -127,10 +126,6 @@ func TestVerifySessionFailsWithUnknownToken(t *testing.T) {
 	}
 }
 
-// TestVerifySessionFailsAndCleansUpExpiredSession guards two behaviors at
-// once: an expired session must be rejected, and it must be removed from
-// storage as a side effect (rather than lingering to be rejected again on
-// every future request).
 func TestVerifySessionFailsAndCleansUpExpiredSession(t *testing.T) {
 	repo := newFakeRepository()
 	acct := newTestAdmin(t, repo, "alice", "correct-horse-battery-staple")
@@ -177,9 +172,6 @@ func TestLogoutRevokesSessionSoItCanNoLongerBeVerified(t *testing.T) {
 	}
 }
 
-// TestLogoutIsIdempotent guards that logging out an already-revoked or
-// never-issued token is not an error - logging out should always leave
-// the client in the "logged out" state, not surface a spurious failure.
 func TestLogoutIsIdempotent(t *testing.T) {
 	repo := newFakeRepository()
 	svc := NewService(repo)

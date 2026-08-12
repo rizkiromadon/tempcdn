@@ -8,19 +8,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/admin"
-	"github.com/tempcdn/tempcdn/internal/cloudflare"
-	"github.com/tempcdn/tempcdn/internal/config"
-	"github.com/tempcdn/tempcdn/internal/file"
-	"github.com/tempcdn/tempcdn/internal/httpserver"
-	"github.com/tempcdn/tempcdn/internal/logger"
-	"github.com/tempcdn/tempcdn/internal/metadata"
-	"github.com/tempcdn/tempcdn/internal/nodestatus"
-	"github.com/tempcdn/tempcdn/internal/ratelimit"
-	"github.com/tempcdn/tempcdn/internal/stats"
-	"github.com/tempcdn/tempcdn/internal/storage"
-	"github.com/tempcdn/tempcdn/internal/sweeper"
-	"github.com/tempcdn/tempcdn/internal/upload"
+	"github.com/rizkiromadon/tempcdn/internal/admin"
+	"github.com/rizkiromadon/tempcdn/internal/cloudflare"
+	"github.com/rizkiromadon/tempcdn/internal/config"
+	"github.com/rizkiromadon/tempcdn/internal/file"
+	"github.com/rizkiromadon/tempcdn/internal/httpserver"
+	"github.com/rizkiromadon/tempcdn/internal/logger"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/nodestatus"
+	"github.com/rizkiromadon/tempcdn/internal/ratelimit"
+	"github.com/rizkiromadon/tempcdn/internal/stats"
+	"github.com/rizkiromadon/tempcdn/internal/storage"
+	"github.com/rizkiromadon/tempcdn/internal/sweeper"
+	"github.com/rizkiromadon/tempcdn/internal/upload"
 )
 
 func main() {
@@ -32,15 +32,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// rootCtx is cancelled on shutdown signal so the background sweeper
-	// stops cleanly alongside the HTTP server.
 	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	defer cancelRoot()
 
-	// DATABASE_DSN must be a "postgres://" or "postgresql://" connection
-	// string: Postgres is required for every deployment, including a
-	// single standalone instance, not just multi-instance setups (e.g.
-	// srv1/srv2/srv3 behind a rotating frontend).
 	repository, err := metadata.NewRepository(rootCtx, cfg.DatabaseDSN, cfg.DatabaseMaxConns)
 	if err != nil {
 		log.Error("failed to initialize metadata repository", "error", err)
@@ -53,9 +47,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Seeds the first admin account if none exists yet. No-op on every boot
-	// after the first, so ADMIN_BOOTSTRAP_USERNAME/PASSWORD are safe to
-	// leave set across restarts/redeploys.
 	if err := admin.Bootstrap(rootCtx, repository, admin.BootstrapConfig{
 		Username: cfg.AdminBootstrapUsername,
 		Password: cfg.AdminBootstrapPassword,
@@ -70,11 +61,6 @@ func main() {
 	adminSessionJanitor := admin.NewSessionJanitor(repository, log)
 	go adminSessionJanitor.Run(rootCtx)
 
-	// Seeds the initial upload_settings row from SERVER_MAX_UPLOAD_MB /
-	// ALLOWED_MIME_TYPES / BLOCKED_EXTENSIONS if it doesn't already exist -
-	// no-op on every boot after the first, so an admin's later changes via
-	// PUT /api/v1/admin/upload-settings survive restarts/redeploys instead
-	// of being overwritten back to these env var defaults.
 	if err := admin.SeedUploadSettings(rootCtx, repository, admin.UploadSettingsDefaults{
 		MaxUploadSizeMB:   cfg.ServerMaxUploadMB,
 		AllowedMimeTypes:  cfg.AllowedMimeTypes,
@@ -103,34 +89,16 @@ func main() {
 
 	metrics := httpserver.NewMetrics()
 
-	// validator is seeded from the database (not directly from cfg), so
-	// that a value an admin previously set via PUT
-	// /api/v1/admin/upload-settings survives this restart. Its rules can
-	// change again at runtime after boot - see the
-	// SetUploadSettingsUpdatedCallback wiring below - without needing
-	// another restart.
 	validator := upload.NewValidator(
 		uploadSettings.MaxUploadSizeMB*1024*1024,
 		uploadSettings.AllowedMimeTypes,
 		uploadSettings.BlockedExtensions,
 	)
 
-	// Whenever an admin successfully changes upload settings through the
-	// API, push the new values into this instance's in-memory validator
-	// immediately - this instance doesn't need to wait for the poller
-	// below. Every other instance sharing this database (including this
-	// one after a restart) picks up the change within settingsSyncInterval
-	// via the SettingsSynchronizer poller started below - see
-	// upload.SettingsSynchronizer for why a restart is no longer required.
 	adminHandler.SetUploadSettingsUpdatedCallback(func(settings *metadata.UploadSettings) {
 		validator.Update(settings.MaxUploadSizeMB*1024*1024, settings.AllowedMimeTypes, settings.BlockedExtensions)
 	})
 
-	// Keeps this instance's validator converged with whatever the
-	// currently-active admin-configured settings are, even when the
-	// change was made through a *different* instance (see "Running
-	// Multiple Instances" in the README) - the callback above only covers
-	// the instance that directly handled the PUT request.
 	settingsSynchronizer := upload.NewSettingsSynchronizer(repository, validator, log)
 	go settingsSynchronizer.Run(rootCtx)
 
@@ -172,11 +140,6 @@ func main() {
 		metrics.UploadErrorsTotal,
 	)
 
-	// Node liveness: lets every instance sharing DATABASE_DSN (e.g.
-	// srv1/srv2/srv3 behind a rotating frontend) push its own heartbeat and
-	// have any still-live instance flag a node offline once its heartbeat
-	// goes stale. A single standalone instance still reports its own row,
-	// it just never sees any peers.
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Error("failed to read hostname", "error", err)
@@ -221,9 +184,6 @@ func main() {
 		RequestLatency:    metrics.RequestLatency,
 	})
 
-	// Expiry sweeper: this is the primary, application-level enforcement of
-	// file expiry. Any R2 Lifecycle Rule configured on the bucket is
-	// defense-in-depth on top of this, not a substitute for it.
 	expirySweeper := sweeper.New(
 		repository,
 		objectStorage,

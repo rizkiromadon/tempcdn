@@ -7,10 +7,6 @@ import (
 	"strings"
 )
 
-// insecureDefaultIPHashSalt is used only when IP_HASH_SALT is unset. It is
-// intentionally recognizable so validate() can detect and warn/fail when an
-// operator forgot to set a real secret, since a known salt makes hashed IPs
-// trivially reversible via a rainbow table of common IPs.
 const insecureDefaultIPHashSalt = "insecure-default-salt"
 
 type Config struct {
@@ -28,21 +24,12 @@ type Config struct {
 	FileTTLHours          int
 	FileSweepIntervalMins int
 
-	// NodeID identifies this process's own row in node_status when running
-	// more than one instance against a shared database (see
-	// nodestatus.ResolveNodeID for the fallback when unset).
 	NodeID string
-	// NodeHeartbeatIntervalSecs is how often this instance upserts its own
-	// node_status row.
+
 	NodeHeartbeatIntervalSecs int
-	// NodeStaleAfterSecs is how long a node's last_heartbeat_at can go
-	// without an update before another instance's janitor flags it
-	// offline. Must be comfortably larger than
-	// NodeHeartbeatIntervalSecs so a single missed heartbeat (e.g. one
-	// slow DB write) doesn't flip a healthy node offline.
+
 	NodeStaleAfterSecs int
-	// NodeJanitorIntervalSecs is how often this instance checks every
-	// node's row for staleness.
+
 	NodeJanitorIntervalSecs int
 
 	RateLimitMaxConcurrentUploads int
@@ -51,9 +38,6 @@ type Config struct {
 
 	AllowedOrigin string
 
-	// AdminBootstrapUsername/Password seed the first admin account on
-	// startup, only if no admin account already exists (see
-	// internal/admin.Bootstrap). Safe to leave set across restarts/redeploys.
 	AdminBootstrapUsername string
 	AdminBootstrapPassword string
 
@@ -97,15 +81,6 @@ func Load() (*Config, error) {
 	}
 	cfg.ServerMaxUploadMB = int64(maxUploadMB)
 
-	// DATABASE_MAX_CONNS caps the Postgres connection pool per instance.
-	// Kept small by default (5) since managed Postgres providers (e.g.
-	// Aiven's smaller tiers) often reserve only a handful of non-superuser
-	// connection slots; exceeding them surfaces as "remaining connection
-	// slots are reserved for roles with the SUPERUSER attribute" on every
-	// subsequent connection attempt. Raise this only if the database's
-	// connection limit and this application's expected concurrency justify
-	// it - remember multi-instance deployments (see docker-compose.multi.yml)
-	// multiply this value by the number of instances sharing the database.
 	maxDBConns, err := parseIntOrDefault("DATABASE_MAX_CONNS", 5)
 	if err != nil {
 		return nil, err
@@ -124,14 +99,6 @@ func Load() (*Config, error) {
 	}
 	cfg.FileSweepIntervalMins = sweepIntervalMins
 
-	// SERVER_MAX_CONCURRENT_UPLOADS is the current name for this setting: it's
-	// a global, process-wide concurrency cap, not a per-client rate limit, so
-	// it intentionally doesn't live in the RATE_LIMIT_* namespace (see L5 in
-	// the code review - that naming invited confusion with per-IP limiting,
-	// which this application does not implement). The old
-	// RATE_LIMIT_MAX_CONCURRENT_UPLOADS name is still honored for one
-	// deprecation cycle so existing deployments don't silently fall back to
-	// the default.
 	maxConcurrent, err := parseIntOrDefault("SERVER_MAX_CONCURRENT_UPLOADS", -1)
 	if err != nil {
 		return nil, err

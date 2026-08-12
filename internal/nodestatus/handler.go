@@ -4,11 +4,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/metadata"
-	"github.com/tempcdn/tempcdn/internal/response"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/response"
 )
 
-// NodeView is the JSON shape of one node in the GET /api/v1/nodes response.
 type NodeView struct {
 	NodeID          string  `json:"node_id"`
 	Hostname        string  `json:"hostname"`
@@ -16,23 +15,15 @@ type NodeView struct {
 	StartedAt       string  `json:"started_at"`
 	LastHeartbeatAt string  `json:"last_heartbeat_at"`
 	MarkedOfflineAt *string `json:"marked_offline_at,omitempty"`
-	// SecondsSinceHeartbeat is computed at response time rather than
-	// stored, so a client polling this endpoint doesn't need its own
-	// clock synced with the server's to tell how stale a node's
-	// heartbeat currently is.
+
 	SecondsSinceHeartbeat float64 `json:"seconds_since_heartbeat"`
 }
 
-// ListResponse is the JSON body returned by GET /api/v1/nodes.
 type ListResponse struct {
 	Nodes       []NodeView `json:"nodes"`
 	GeneratedAt string     `json:"generated_at"`
 }
 
-// Handler serves GET /api/v1/nodes: a read-only view of every known node's
-// current liveness row (see metadata.Repository.ListNodeStatus). It does
-// not itself decide online/offline - that's Janitor's job on a schedule -
-// this just reports whatever the database currently says.
 type Handler struct {
 	repository metadata.Repository
 	now        func() time.Time

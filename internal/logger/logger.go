@@ -22,9 +22,6 @@ const (
 	colorBold   = "\033[1m"
 )
 
-// New returns a logger. When stdout is a terminal, it uses a compact,
-// colorized, human-readable format. Otherwise (e.g. redirected to a file or
-// collected by a log aggregator) it falls back to structured JSON.
 func New() *slog.Logger {
 	if isTerminal(os.Stdout) {
 		return slog.New(newPrettyHandler(os.Stdout, slog.LevelInfo))

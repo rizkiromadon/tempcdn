@@ -1,5 +1,7 @@
 # TempCDN Backend
 
+Repository: https://github.com/rizkiromadon/tempcdn
+
 TempCDN is a login-free file upload backend. Files are stored physically in
 Cloudflare R2, metadata is stored in Postgres (a single standalone instance
 or multiple instances sharing one metadata store), and every file is
@@ -24,6 +26,7 @@ core "temporary" guarantee.
   - [Metrics](#metrics)
   - [Admin Authentication](#admin-authentication)
   - [API Keys](#api-keys)
+  - [Upload Settings](#upload-settings)
   - [Config](#config)
   - [Stats](#stats)
   - [Node Status](#node-status)
@@ -31,12 +34,14 @@ core "temporary" guarantee.
   - [Get File Info](#get-file-info)
   - [Delete a File](#delete-a-file)
   - [Error Format](#error-format)
+  - [CORS](#cors)
 - [Design Notes](#design-notes)
   - [Rate limiting strategy](#rate-limiting-strategy)
   - [Streaming checksum vs. single-read upload](#streaming-checksum-vs-single-read-upload)
   - [Expiry enforcement](#expiry-enforcement)
   - [Admin auth: opaque sessions, not JWTs](#admin-auth-opaque-sessions-not-jwts)
 - [Known Limitations](#known-limitations)
+- [Running Multiple Instances](#running-multiple-instances)
 
 ## Features
 
@@ -58,19 +63,19 @@ core "temporary" guarantee.
 ## Architecture
 
 ```
-cmd/server            Application entry point
+cmd/server             Application entry point
 internal/config        Environment-based configuration loading
-internal/httpserver     Router, middleware (logging, recovery, CORS), metrics
-internal/upload         Upload handler, service, validator, checksum logic
-internal/file            File info retrieval and deletion handler/service
-internal/stats           Public usage-summary handler (GET /api/v1/stats)
-internal/metadata       Postgres repository and file record model
-internal/storage         Object storage interface and Cloudflare R2 client
-internal/sweeper         Background expiry sweeper (deletes expired files)
-internal/ratelimit      In-process concurrency limiter
-internal/idgen           File ID generation
-internal/response        Shared JSON response helpers
-internal/logger           Structured logger setup
+internal/httpserver    Router, middleware (logging, recovery, CORS), metrics
+internal/upload        Upload handler, service, validator, checksum logic
+internal/file          File info retrieval and deletion handler/service
+internal/stats         Public usage-summary handler (GET /api/v1/stats)
+internal/metadata      Postgres repository and file record model
+internal/storage       Object storage interface and Cloudflare R2 client
+internal/sweeper       Background expiry sweeper (deletes expired files)
+internal/ratelimit     In-process concurrency limiter
+internal/idgen         File ID generation
+internal/response      Shared JSON response helpers
+internal/logger        Structured logger setup
 ```
 
 ## Getting Started

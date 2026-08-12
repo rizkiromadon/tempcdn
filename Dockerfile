@@ -7,14 +7,6 @@ COPY go.sum* ./
 
 COPY . .
 
-# Prefer a committed, reviewed go.sum for reproducible, offline-cacheable
-# builds; `go mod tidy` is deliberately NOT run here since it can mutate
-# go.mod/go.sum at build time based on whatever the network happens to
-# resolve, defeating the point of pinning. Once go.sum is committed to the
-# repo (see README "Known Limitations"), this becomes a plain `go mod
-# download` using the pinned versions. Until then, `go mod tidy` runs as a
-# one-time fallback so the image still builds from a checkout that predates
-# the committed go.sum.
 RUN if [ -s go.sum ]; then \
       go mod download; \
     else \

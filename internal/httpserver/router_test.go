@@ -9,25 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/admin"
-	"github.com/tempcdn/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/admin"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
 )
 
-// testLogger returns a discard-output logger for tests that need a
-// non-nil *slog.Logger to construct a Router but don't care about its
-// output.
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
-
-// These tests cover the /files/{id} preflight dispatch bug: a preflight
-// (OPTIONS) always answered with the permissive GET CORS policy
-// (Allow-Methods: GET, OPTIONS), which does not include DELETE. Per the CORS
-// spec, browsers reject a preflight - and therefore the real request - when
-// the requested method isn't listed in Access-Control-Allow-Methods, which
-// broke browser-based delete for every origin, including the configured
-// ALLOWED_ORIGIN. filePreflightCORS must instead answer according to the
-// browser-sent Access-Control-Request-Method header.
 
 func TestFilePreflightCORSAnswersGETPreflightWithPermissivePolicy(t *testing.T) {
 	getCORS := CORS("*", "GET, OPTIONS")
@@ -68,9 +56,6 @@ func TestFilePreflightCORSAnswersDELETEPreflightWithStrictPolicyMatchingAllowedO
 
 	handler.ServeHTTP(rec, req)
 
-	// The regression: this used to come back "*" / "GET, OPTIONS", which
-	// does not list DELETE, so the browser would refuse to send the real
-	// DELETE request at all - even from the legitimate ALLOWED_ORIGIN.
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
 		t.Errorf("expected Allow-Origin 'https://app.example.com' for DELETE preflight, got %q", got)
 	}
@@ -89,9 +74,6 @@ func TestFilePreflightCORSFallsBackToPermissivePolicyWhenRequestMethodMissing(t 
 
 	handler := filePreflightCORS(getCORS, deleteCORS, noop)
 
-	// A bare OPTIONS request with no Access-Control-Request-Method (e.g. a
-	// manual health-check style call, not a browser CORS preflight) should
-	// not accidentally get the strict, origin-locked policy.
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/files/abc123", nil)
 	rec := httptest.NewRecorder()
 
@@ -146,11 +128,6 @@ func TestCORSMiddlewareCallsNextForNonOptionsRequest(t *testing.T) {
 	}
 }
 
-// TestHealthzAllowsHead guards against a real gap: chi does not
-// auto-register HEAD for a route registered with Get (unlike
-// net/http.ServeMux), so uptime/monitoring checks that poll with HEAD -
-// specifically to avoid pulling a response body on every check - would get
-// a 405 unless HEAD is registered explicitly alongside GET.
 func TestHealthzAllowsHead(t *testing.T) {
 	router := NewRouter(RouterDependencies{
 		Logger:        testLogger(),
@@ -167,8 +144,7 @@ func TestHealthzAllowsHead(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Errorf("expected Content-Type application/json, got %q", got)
 	}
-	// Per the HTTP spec a HEAD response must carry no body, even though
-	// GET /healthz on the same route returns one.
+
 	if rec.Body.Len() != 0 {
 		t.Errorf("expected empty body for HEAD /healthz, got %q", rec.Body.String())
 	}
@@ -192,15 +168,11 @@ func TestHealthzGetStillReturnsBody(t *testing.T) {
 	}
 }
 
-// TestMetricsOpenWhenNoAdminServiceConfigured guards a router constructed
-// without an AdminService at all (e.g. a minimal test setup): /metrics
-// must stay reachable rather than panicking or hard-failing, since there
-// is no credential store to check requests against.
 func TestMetricsOpenWhenNoAdminServiceConfigured(t *testing.T) {
 	router := NewRouter(RouterDependencies{
 		Logger:        testLogger(),
 		AllowedOrigin: "https://app.example.com",
-		// AdminService intentionally nil.
+
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
@@ -212,9 +184,6 @@ func TestMetricsOpenWhenNoAdminServiceConfigured(t *testing.T) {
 	}
 }
 
-// TestMetricsRejectsRequestWithNoCredentials guards the actual access
-// control on /metrics once an AdminService is configured (the normal case
-// in a real deployment): an unauthenticated request must be rejected.
 func TestMetricsRejectsRequestWithNoCredentials(t *testing.T) {
 	router := NewRouter(RouterDependencies{
 		Logger:        testLogger(),
@@ -231,9 +200,6 @@ func TestMetricsRejectsRequestWithNoCredentials(t *testing.T) {
 	}
 }
 
-// TestMetricsAcceptsValidAPIKey covers the API key path - the replacement
-// for the old static METRICS_TOKEN environment variable - accepted either
-// as X-Metrics-Token or as a Bearer Authorization header.
 func TestMetricsAcceptsValidAPIKey(t *testing.T) {
 	repo := newMetricsFakeRepository()
 	adminService := admin.NewService(repo)
@@ -268,8 +234,6 @@ func TestMetricsAcceptsValidAPIKey(t *testing.T) {
 	}
 }
 
-// TestMetricsRejectsRevokedAPIKey guards that a revoked API key no longer
-// authenticates, even though its row (and hash) still exist.
 func TestMetricsRejectsRevokedAPIKey(t *testing.T) {
 	repo := newMetricsFakeRepository()
 	adminService := admin.NewService(repo)
@@ -298,8 +262,6 @@ func TestMetricsRejectsRevokedAPIKey(t *testing.T) {
 	}
 }
 
-// TestMetricsRejectsInvalidAPIKey guards against a wrong/garbage
-// credential being accepted.
 func TestMetricsRejectsInvalidAPIKey(t *testing.T) {
 	router := NewRouter(RouterDependencies{
 		Logger:        testLogger(),
@@ -317,9 +279,6 @@ func TestMetricsRejectsInvalidAPIKey(t *testing.T) {
 	}
 }
 
-// metricsFakeRepository is a minimal in-memory metadata.Repository stub
-// covering only the API-key methods exercised by the /metrics auth tests
-// above. Every other method panics if called.
 type metricsFakeRepository struct {
 	apiKeysByHash map[string]*metadata.APIKey
 	apiKeysByID   map[string]*metadata.APIKey

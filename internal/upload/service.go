@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tempcdn/tempcdn/internal/idgen"
-	"github.com/tempcdn/tempcdn/internal/metadata"
-	"github.com/tempcdn/tempcdn/internal/storage"
+	"github.com/rizkiromadon/tempcdn/internal/idgen"
+	"github.com/rizkiromadon/tempcdn/internal/metadata"
+	"github.com/rizkiromadon/tempcdn/internal/storage"
 )
 
 const sniffBufferSize = 512
@@ -35,10 +35,7 @@ type Input struct {
 type Result struct {
 	Record    *metadata.FileRecord
 	Duplicate bool
-	// DeleteToken is the plaintext delete-authorization token. It is only
-	// ever populated for a fresh (non-duplicate) upload, since only the
-	// original uploader who received it at upload time should be able to
-	// delete the file - a later "duplicate" uploader does not get it.
+
 	DeleteToken string
 }
 
@@ -88,11 +85,7 @@ func (s *Service) Upload(ctx context.Context, input Input) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("spool file content while hashing: %w", err)
 	}
-	// input.SizeBytes came from the multipart header, set before this
-	// content was actually read; writtenBytes is what was verified to
-	// reach disk (and subsequently R2). Treat writtenBytes as the source
-	// of truth and fail loudly on divergence rather than silently
-	// persisting a size that was never confirmed.
+
 	if writtenBytes != input.SizeBytes {
 		return nil, fmt.Errorf("upload size mismatch: multipart header reported %d bytes but %d bytes were actually read", input.SizeBytes, writtenBytes)
 	}
