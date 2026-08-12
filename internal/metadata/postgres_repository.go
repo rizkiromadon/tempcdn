@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+//go:embed postgres_migrations
 var postgresMigrationFiles embed.FS
 
 const postgresMigrationLockID = 72186_004
